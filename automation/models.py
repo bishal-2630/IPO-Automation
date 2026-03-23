@@ -113,6 +113,7 @@ class ApplicationLog(models.Model):
     status = models.CharField(max_length=100)
     remark = models.TextField(blank=True, null=True)
     is_read = models.BooleanField(default=False)
+    is_listed = models.BooleanField(default=False)
     timestamp = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

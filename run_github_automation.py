@@ -222,9 +222,9 @@ def run_automation():
                         if remark != "No ordinary shares found":
                             cur.execute("""
                                 INSERT INTO automation_applicationlog
-                                    (account_id, company_name, status, remark, timestamp, is_read)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                            """, (acc['id'], ipo_name, status, remark, datetime.datetime.now(datetime.timezone.utc), False))
+                                    (account_id, company_name, status, remark, timestamp, is_read, is_listed)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            """, (acc['id'], ipo_name, status, remark, datetime.datetime.now(datetime.timezone.utc), False, False))
                             conn.commit()
                         else:
                             print(f"  ℹ️  Skipping database log for: {remark}")
