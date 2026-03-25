@@ -41,13 +41,18 @@ def get_tokens_for_allotted_users(company_name):
     try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
-        # Join ApplicationLog with Account and FCMToken
+        # Join with the LATEST status only for each account/company
         query = """
             SELECT DISTINCT a.boid, t.token 
-            FROM automation_applicationlog l
-            JOIN automation_account a ON l.account_id = a.id
+            FROM automation_account a
             JOIN automation_fcmtoken t ON a.owner_id = t.user_id
-            WHERE l.company_name = %s AND l.status = 'Allotted'
+            JOIN (
+                SELECT account_id, status, 
+                       ROW_NUMBER() OVER (PARTITION BY account_id, company_name ORDER BY timestamp DESC) as rn
+                FROM automation_applicationlog
+                WHERE company_name = %s
+            ) l ON a.id = l.account_id
+            WHERE l.rn = 1 AND l.status = 'Allotted'
         """
         cur.execute(query, (company_name,))
         rows = cur.fetchall()
