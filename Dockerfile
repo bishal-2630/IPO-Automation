@@ -59,6 +59,5 @@ USER user
 # Expose port (Hugging Face Spaces use 7860)
 EXPOSE 7860
 
-# Start Gunicorn server
-# Replace 'config.wsgi' with your actual wsgi application path if different
-CMD ["sh", "-c", "python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:7860"]
+# Start the application
+CMD ["sh", "-c", "python manage.py migrate --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:7860 --workers 1 --threads 2 --timeout 60"]

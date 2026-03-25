@@ -13,5 +13,3 @@ cryptography
 whitenoise
 playwright
 gunicorn
-# easyocr  # Commented out if not strictly needed to save build time/space, but keeping as per original
-easyocr
