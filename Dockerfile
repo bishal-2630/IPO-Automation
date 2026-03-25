@@ -59,5 +59,5 @@ USER user
 # Expose port (Hugging Face Spaces use 7860)
 EXPOSE 7860
 
-# Start the application
-CMD ["sh", "-c", "python manage.py migrate --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:7860 --workers 1 --threads 2 --timeout 60"]
+# Start the application with verbose output for debugging
+CMD ["sh", "-c", "echo 'Running migrations...' && python manage.py migrate --noinput && echo 'Starting Gunicorn...' && gunicorn config.wsgi:application --bind 0.0.0.0:7860 --workers 1 --threads 4 --timeout 120 --access-logfile - --error-logfile -"]
