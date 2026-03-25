@@ -43,7 +43,7 @@ def get_tokens_for_allotted_users(company_name):
         cur = conn.cursor()
         # Join ApplicationLog with Account and FCMToken
         query = """
-            SELECT a.boid, t.token 
+            SELECT DISTINCT a.boid, t.token 
             FROM automation_applicationlog l
             JOIN automation_account a ON l.account_id = a.id
             JOIN automation_fcmtoken t ON a.owner_id = t.user_id

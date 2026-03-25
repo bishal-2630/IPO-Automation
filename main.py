@@ -1412,36 +1412,35 @@ def run_status_check():
                                               document.querySelector('.text-center.text-text-secondary');
                             
                             if (resultDiv && resultDiv.innerText.trim().length > 5) {
-                                return resultDiv.innerText.trim();
+                                const text = resultDiv.innerText.trim();
+                                if (text.toLowerCase().includes("congratulations") || text.toLowerCase().includes("allotted")) {
+                                    return "Allotted|" + text;
+                                }
+                                if (text.toLowerCase().includes("no ipo/fpo allotment found") || text.toLowerCase().includes("not allotted")) {
+                                    return "Not Allotted|" + text;
+                                }
+                                return "Unknown|" + text;
                             }
-                            
-                            // Check for alert boxes or general messages
-                            const bodyText = document.body.innerText;
-                            if (bodyText.includes("no IPO/FPO allotment found") || bodyText.includes("not find any share allotment")) {
-                                return "Not Allotted";
-                            }
-                            if (bodyText.includes("Congratulations")) {
-                                return "Allotted";
-                            }
-                            return bodyText;
+                            return "NotFound|No result container found";
                         }
                     """)
                     
-                    if "no IPO/FPO allotment found" in res_info or "not allotted" in res_info.lower() or "Sorry, no IPO/FPO allotment found" in res_info:
+                    if res_info.startswith("Not Allotted"):
                         status_category = "Not Allotted"
-                        feedback = f"{company_name} IPO has not been allotted."
-                    elif "congratulations" in res_info.lower() or "have been allotted" in res_info.lower() or "Allotted" in res_info:
+                        feedback = res_info.split("|", 1)[1]
+                    elif res_info.startswith("Allotted"):
                         status_category = "Allotted"
-                        feedback = f"Congratulations!! {company_name} IPO has been allotted."
+                        feedback = res_info.split("|", 1)[1]
                         # Try to extract Kitta
-                        kitta_match = re.search(r'(\d+)\s*Kitta', res_info, re.IGNORECASE)
+                        kitta_match = re.search(r'(\d+)\s*Kitta', feedback, re.IGNORECASE)
                         if kitta_match:
                             feedback = f"Congratulations!! {company_name} IPO has been allotted ({kitta_match.group(1)} Kitta)."
                     else:
                         status_category = "Unknown"
-                        feedback = res_info
-                        # DEBUG: Print snippet of res_info if unknown to help refine
-                        print(f"[{username}] DEBUG: Raw result text (first 200 chars): {res_info[:200]}")
+                        feedback = res_info.split("|", 1)[1]
+                        # Final fallback for generic messages if the above failed
+                        if "congratulations" in feedback.lower(): # Still check the specific container text
+                             status_category = "Allotted"
 
                     print(f"[{username}] Result: {feedback}")
                     
