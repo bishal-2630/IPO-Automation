@@ -1,24 +1,25 @@
 import os
 import psycopg2
 from playwright.sync_api import sync_playwright
-from notifications import broadcast_push_notification
+from notifications import broadcast_push_notification, send_push_notification
 
 # Configuration
 LISTING_URL = "https://www.sharesansar.com/category/share-listing"
 CACHE_FILE = "notified_listings.txt"
 
-def get_allotted_companies():
-    """Fetch unique allotted company names from the database."""
+def get_applied_companies():
+    """Fetch unique applied company names from the database."""
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        print("DATABASE_URL not found. Cannot fetch allotted IPOs.")
+        print("DATABASE_URL not found. Cannot fetch applied IPOs.")
         return []
 
     companies = set()
     try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
-        cur.execute("SELECT DISTINCT company_name FROM automation_applicationlog WHERE status = 'Allotted'")
+        # Fetch all unique companies that were ever applied (Successful or Allotted)
+        cur.execute("SELECT DISTINCT company_name FROM automation_applicationlog")
         rows = cur.fetchall()
         for row in rows:
             if row[0]:
@@ -26,9 +27,41 @@ def get_allotted_companies():
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Error fetching allotted companies: {e}")
+        print(f"Error fetching applied companies: {e}")
     
     return list(companies)
+
+def get_tokens_for_allotted_users(company_name):
+    """Fetch 16-digit BOIDs and FCM tokens for users who were allotted the company."""
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        return {}
+
+    user_tokens = {} # {boid: [tokens]}
+    try:
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        # Join ApplicationLog with Account and FCMToken
+        query = """
+            SELECT a.boid, t.token 
+            FROM automation_applicationlog l
+            JOIN automation_account a ON l.account_id = a.id
+            JOIN automation_fcmtoken t ON a.owner_id = t.user_id
+            WHERE l.company_name = %s AND l.status = 'Allotted'
+        """
+        cur.execute(query, (company_name,))
+        rows = cur.fetchall()
+        for boid, token in rows:
+            if not boid: continue
+            if boid not in user_tokens:
+                user_tokens[boid] = []
+            user_tokens[boid].append(token)
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error fetching tokens for allotted users: {e}")
+    
+    return user_tokens
 
 def get_previously_notified():
     """Read the cache file to see which companies we already notified about."""
@@ -100,12 +133,12 @@ def scrape_listing_headlines():
     return headlines
 
 def check_for_new_listings():
-    allotted_companies = get_allotted_companies()
-    if not allotted_companies:
-        print("No allotted IPOs found in the database. Nothing to check.")
+    applied_companies = get_applied_companies()
+    if not applied_companies:
+        print("No applied IPOs found in the database. Nothing to check.")
         return
 
-    print(f"Found {len(allotted_companies)} allotted IPO(s) to monitor.")
+    print(f"Found {len(applied_companies)} applied IPO(s) to monitor.")
     headlines = scrape_listing_headlines()
     
     if not headlines:
@@ -115,7 +148,7 @@ def check_for_new_listings():
     notified = get_previously_notified()
     found_new_listing = False
 
-    for company in allotted_companies:
+    for company in applied_companies:
         if company in notified:
             continue
             
@@ -133,16 +166,29 @@ def check_for_new_listings():
             if search_term in headline_lower and ("list" in headline_lower or "secondary" in headline_lower):
                 print(f"MATCH FOUND! {company} is listed in headline: '{headline}'")
                 
-                title = f"🚀 IPO Listed in NEPSE!"
-                body = f"{company} has been listed in the secondary market."
+                # 1. Broad Notification (General Alert)
+                broadcast_push_notification(
+                    title=f"🚀 IPO Listed in NEPSE!",
+                    body=f"{company} has been listed in the secondary market."
+                )
+
+                # 2. Personalized Notification (for Allotted Users)
+                allotted_users = get_tokens_for_allotted_users(company)
+                for boid, tokens in allotted_users.items():
+                    # Extract last 8 digits of BOID for the title (e.g. 04598041)
+                    account_number = boid[-8:] if len(boid) >= 8 else boid
+                    send_push_notification(
+                        tokens=tokens,
+                        title=f"{account_number}",
+                        body=f"Your alloted {company} IPO has been listed in secondary market."
+                    )
                 
-                broadcast_push_notification(title, body)
                 update_notified_cache(company)
                 found_new_listing = True
                 break
 
     if not found_new_listing:
-        print("No new listings found for the allotted companies.")
+        print("No new listings found for the monitored companies.")
 
 if __name__ == "__main__":
     check_for_new_listings()
