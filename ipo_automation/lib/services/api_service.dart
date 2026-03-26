@@ -123,6 +123,17 @@ class ApiService {
     }
   }
 
+  Future<void> deleteAccount(int id) async {
+    final token = await getToken();
+    final response = await http.delete(
+      Uri.parse('$baseUrl/accounts/$id/'),
+      headers: {'Authorization': 'Token $token'},
+    );
+    if (response.statusCode != 204) {
+      throw Exception('Failed to delete account: ${response.body}');
+    }
+  }
+
   Future<void> saveFcmToken(String fcmToken, String deviceId) async {
     final token = await getToken();
     if (token == null) return;

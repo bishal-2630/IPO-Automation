@@ -177,106 +177,186 @@ class _HomeScreenState extends State<HomeScreen> {
 
 
   Widget _buildAccountCard(Account acc) {
-    return Card(
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: ListTile(
-        contentPadding: EdgeInsets.all(16),
-        leading: CircleAvatar(
-          backgroundColor: Colors.deepPurple.withOpacity(0.1),
-          child: Icon(Icons.person, color: Colors.deepPurple),
+    return Dismissible(
+      key: Key('account_${acc.id}'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.redAccent,
+          borderRadius: BorderRadius.circular(12),
         ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        alignment: Alignment.centerRight,
+        padding: EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            Icon(Icons.delete_outline, color: Colors.white, size: 28),
+            SizedBox(height: 4),
             Text(
-              acc.user, 
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              'Delete',
+              style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
             ),
-            if (acc.ownerName != null && acc.ownerName!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4.0),
-                child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.deepPurple.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    acc.ownerName!,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.deepPurple,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 8.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.account_balance, size: 14, color: Colors.grey),
-                  SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      acc.bank, 
-                      style: TextStyle(color: Colors.grey[400]),
-                    ),
-                  ),
-                ],
+      ),
+      confirmDismiss: (direction) async {
+        return await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 28),
+                SizedBox(width: 10),
+                Text('Delete Account', style: TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: Text(
+              'Are you sure you want to delete your account?\n\nThis action cannot be undone.',
+              style: TextStyle(fontSize: 14, height: 1.5),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: Text('Cancel', style: TextStyle(color: Colors.grey)),
               ),
-              SizedBox(height: 4),
-              Row(
-                children: [
-                  Icon(Icons.fingerprint, size: 14, color: Colors.grey),
-                  SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      "BOID: ${acc.boid}", 
-                      style: TextStyle(color: Colors.grey[400], fontSize: 13),
-                    ),
-                  ),
-                ],
-              ),
-              SizedBox(height: 4),
-              Row(
-                children: [
-                  Icon(Icons.history, size: 14, color: Colors.grey),
-                  SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      "Last run: ${acc.lastApplied}", 
-                      style: TextStyle(color: Colors.grey[400], fontSize: 12),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                icon: Icon(Icons.delete_outline, size: 18),
+                label: Text('Delete'),
               ),
             ],
           ),
-        ),
-        onTap: () {
-          // Normal tap could show details
-        },
-        onLongPress: () {
-          // No longer needed for OTP relay
-        },
-        trailing: IconButton(
-          icon: Icon(Icons.edit, color: Colors.deepPurple),
-          onPressed: () async {
-            final result = await Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => AddAccountScreen(account: acc)),
-            );
-            if (result == true) setState(() {});
+        ) ?? false;
+      },
+      onDismissed: (direction) async {
+        try {
+          await api.deleteAccount(acc.id);
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Account "${acc.user}" deleted'),
+              backgroundColor: Colors.redAccent,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        } catch (e) {
+          setState(() {}); // restore item on failure
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to delete account: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      },
+      child: Card(
+        margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ListTile(
+          contentPadding: EdgeInsets.all(16),
+          leading: CircleAvatar(
+            backgroundColor: Colors.deepPurple.withOpacity(0.1),
+            child: Icon(Icons.person, color: Colors.deepPurple),
+          ),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                acc.user,
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              if (acc.ownerName != null && acc.ownerName!.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4.0),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.deepPurple.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      acc.ownerName!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.deepPurple,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 8.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.account_balance, size: 14, color: Colors.grey),
+                    SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        acc.bank,
+                        style: TextStyle(color: Colors.grey[400]),
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(Icons.fingerprint, size: 14, color: Colors.grey),
+                    SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        "BOID: ${acc.boid}",
+                        style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(Icons.history, size: 14, color: Colors.grey),
+                    SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        "Last run: ${acc.lastApplied}",
+                        style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          onTap: () {
+            // Normal tap could show details
           },
+          onLongPress: () {
+            // No longer needed for OTP relay
+          },
+          trailing: IconButton(
+            icon: Icon(Icons.edit, color: Colors.deepPurple),
+            onPressed: () async {
+              final result = await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => AddAccountScreen(account: acc)),
+              );
+              if (result == true) setState(() {});
+            },
+          ),
         ),
       ),
     );
