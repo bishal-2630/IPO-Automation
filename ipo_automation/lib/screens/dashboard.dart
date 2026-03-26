@@ -10,13 +10,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final ApiService api = ApiService();
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  late Future<List<dynamic>> _logsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _logsFuture = api.getLogs();
+  }
+
+  Future<void> _refreshLogs() async {
+    setState(() {
+      _logsFuture = api.getLogs();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<List<dynamic>>(
-      future: api.getLogs(),
+      future: _logsFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) return Center(child: CircularProgressIndicator());
+        // Only show centered loading on the very first load (when there's no data yet)
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+          return Center(child: CircularProgressIndicator());
+        }
         if (snapshot.hasError) return Center(child: Text("Error: ${snapshot.error}"));
 
         List<dynamic> allLogs = snapshot.data ?? [];
@@ -93,7 +109,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             Expanded(
               child: RefreshIndicator(
-                onRefresh: () async => setState(() {}),
+                onRefresh: _refreshLogs,
                 child: ListView.builder(
                   padding: EdgeInsets.only(bottom: 80),
                   itemCount: filteredLogs.length,
