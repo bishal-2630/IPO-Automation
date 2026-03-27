@@ -87,19 +87,13 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          setState(() {});
-          await _fetchLatestLog();
-        },
-        child: IndexedStack(
-          index: _selectedIndex,
-          children: [
-            _buildAccountsTab(),
-            BankListScreen(),
-            DashboardScreen(),
-          ],
-        ),
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: [
+          _buildAccountsTab(),
+          BankListScreen(),
+          DashboardScreen(),
+        ],
       ),
       bottomNavigationBar: _buildBottomNav(),
     );
@@ -125,7 +119,10 @@ class _HomeScreenState extends State<HomeScreen> {
           }
 
           return RefreshIndicator(
-            onRefresh: () async => setState(() {}),
+            onRefresh: () async {
+              setState(() {});
+              await _fetchLatestLog();
+            },
             child: Column(
               children: [
                 Expanded(
@@ -156,10 +153,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildEmptyState(String title, String sub) {
-    return Column(
-      children: [
-        Expanded(
-          child: Center(
+    return RefreshIndicator(
+      onRefresh: () async {
+        setState(() {});
+        await _fetchLatestLog();
+      },
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height * 0.7,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -170,8 +173,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

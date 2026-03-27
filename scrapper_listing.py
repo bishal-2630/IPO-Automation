@@ -37,13 +37,13 @@ def get_tokens_for_allotted_users(company_name):
     if not db_url:
         return {}
 
-    user_tokens = {} # {boid: [tokens]}
+    account_data = {} # {account_id: {'boid': boid, 'tokens': set()}}
     try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
         # Join with the LATEST status only for each account/company
         query = """
-            SELECT DISTINCT a.boid, t.token 
+            SELECT DISTINCT a.id, a.boid, t.token 
             FROM automation_account a
             JOIN automation_fcmtoken t ON a.owner_id = t.user_id
             JOIN (
@@ -56,17 +56,22 @@ def get_tokens_for_allotted_users(company_name):
         """
         cur.execute(query, (company_name,))
         rows = cur.fetchall()
-        for boid, token in rows:
-            if not boid: continue
-            if boid not in user_tokens:
-                user_tokens[boid] = []
-            user_tokens[boid].append(token)
+        for acc_id, boid, token in rows:
+            if not acc_id or not boid: continue
+            if acc_id not in account_data:
+                account_data[acc_id] = {'boid': boid, 'tokens': set()}
+            if token:
+                account_data[acc_id]['tokens'].add(token)
         cur.close()
         conn.close()
     except Exception as e:
         print(f"Error fetching tokens for allotted users: {e}")
     
-    return user_tokens
+    # Convert sets back to lists for easy JSON serialization if needed
+    for acc_id in account_data:
+        account_data[acc_id]['tokens'] = list(account_data[acc_id]['tokens'])
+        
+    return account_data
 
 def get_previously_notified():
     """Read the cache file to see which companies we already notified about."""
@@ -137,6 +142,27 @@ def scrape_listing_headlines():
             
     return headlines
 
+def save_listing_log(account_id, company_name, headline):
+    """Save a listing event to the ApplicationLog table."""
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        return
+    
+    try:
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        query = """
+            INSERT INTO automation_applicationlog (account_id, company_name, status, remark, is_read, is_listed, timestamp)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW())
+        """
+        cur.execute(query, (account_id, company_name, 'Listed', headline, False, True))
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"Log saved for account {account_id}: {company_name} listed.")
+    except Exception as e:
+        print(f"Error saving listing log for account {account_id}: {e}")
+
 def check_for_new_listings():
     applied_companies = get_applied_companies()
     if not applied_companies:
@@ -177,16 +203,24 @@ def check_for_new_listings():
                     body=f"{company} has been listed in the secondary market."
                 )
 
-                # 2. Personalized Notification (for Allotted Users)
-                allotted_users = get_tokens_for_allotted_users(company)
-                for boid, tokens in allotted_users.items():
-                    # Extract last 8 digits of BOID for the title (e.g. 04598041)
-                    account_number = boid[-8:] if len(boid) >= 8 else boid
-                    send_push_notification(
-                        tokens=tokens,
-                        title=f"{account_number}",
-                        body=f"Your alloted {company} IPO has been listed in secondary market."
-                    )
+                # 2. Personalized Notification (for Allotted Users) and saving to DB
+                account_data = get_tokens_for_allotted_users(company)
+                for acc_id, data in account_data.items():
+                    boid = data['boid']
+                    tokens = data['tokens']
+                    
+                    # Save to database so it appears in Status tab
+                    save_listing_log(acc_id, company, headline)
+
+                    # Send push notification
+                    if tokens:
+                        # Extract last 8 digits of BOID for the title (e.g. 04598041)
+                        account_number = boid[-8:] if len(boid) >= 8 else boid
+                        send_push_notification(
+                            tokens=tokens,
+                            title=f"{account_number}",
+                            body=f"Your alloted {company} IPO has been listed in secondary market."
+                        )
                 
                 update_notified_cache(company)
                 found_new_listing = True

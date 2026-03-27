@@ -54,14 +54,25 @@ class _BankListScreenState extends State<BankListScreen> {
           final banks = snapshot.data ?? [];
 
           if (banks.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+            return RefreshIndicator(
+              onRefresh: () async => setState(() {}),
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
                 children: [
-                  Icon(Icons.account_balance, size: 80, color: Colors.grey[800]),
-                  SizedBox(height: 16),
-                  Text("No bank credentials added.", style: TextStyle(color: Colors.grey)),
-                  Text("Add them to enable balance checks.", style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.7,
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.account_balance, size: 80, color: Colors.grey[800]),
+                          SizedBox(height: 16),
+                          Text("No bank credentials added.", style: TextStyle(color: Colors.grey)),
+                          Text("Add them to enable balance checks.", style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ),
             );

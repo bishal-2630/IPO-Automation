@@ -49,13 +49,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }).toList();
 
         if (displayLogs.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+          return RefreshIndicator(
+            onRefresh: _refreshLogs,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
               children: [
-                Icon(Icons.notifications_none, size: 60, color: Colors.grey),
-                SizedBox(height: 16),
-                Text("No notifications yet", style: TextStyle(color: Colors.grey)),
+                SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.7,
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.notifications_none, size: 60, color: Colors.grey),
+                        SizedBox(height: 16),
+                        Text("No notifications yet", style: TextStyle(color: Colors.grey)),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           );
@@ -114,8 +125,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   padding: EdgeInsets.only(bottom: 80),
                   itemCount: filteredLogs.length,
                   itemBuilder: (context, index) {
-                    final log = filteredLogs[index];
-                    final isSuccess = log['status'] == 'Triggered' || log['status'] == 'Success';
+                    final status = log['status']?.toString() ?? '';
+                    final isListed = status == 'Listed';
+                    final isSuccess = status == 'Triggered' || status == 'Success' || isListed;
                     
                     return Dismissible(
                       key: Key(log['id'].toString()),
@@ -147,10 +159,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: isSuccess ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+                            backgroundColor: isListed 
+                                ? Colors.blue.withOpacity(0.1) 
+                                : (isSuccess ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1)),
                             child: Icon(
-                              isSuccess ? Icons.check : Icons.error_outline,
-                              color: isSuccess ? Colors.green : Colors.red,
+                              isListed ? Icons.trending_up : (isSuccess ? Icons.check : Icons.error_outline),
+                              color: isListed ? Colors.blue : (isSuccess ? Colors.green : Colors.red),
                             ),
                           ),
                           title: Row(
