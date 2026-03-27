@@ -125,6 +125,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   padding: EdgeInsets.only(bottom: 80),
                   itemCount: filteredLogs.length,
                   itemBuilder: (context, index) {
+                    final log = filteredLogs[index];
                     final status = log['status']?.toString() ?? '';
                     final isListed = status == 'Listed';
                     final isSuccess = status == 'Triggered' || status == 'Success' || isListed;
