@@ -1281,7 +1281,7 @@ def solve_captcha(page, reader, max_retries=5):
             
             # Locate the captcha image
             # The CDSC portal usually has the image next to the input
-            captcha_img = page.locator("img").filter(has_attribute=("src", re.compile(r"captcha", re.I))).first
+            captcha_img = page.locator("img[src*='captcha']").first
             if not captcha_img.is_visible():
                 # Fallback: find any image near the captcha input
                 captcha_img = page.locator("input#captcha + img, .captcha-image img").first
@@ -1359,119 +1359,144 @@ def run_status_check():
             page.goto(url, timeout=60000, wait_until='networkidle')
             page.wait_for_timeout(3000)
             
-            # 1. Get available companies from dropdown
-            page.wait_for_selector("select#company, select[name='companyID']", timeout=15000)
-            companies = page.evaluate("""
-                () => {
-                    const select = document.querySelector('select#company, select[name="companyID"]');
-                    if (!select) return [];
-                    return Array.from(select.options)
-                        .map(o => ({ name: o.innerText.trim(), value: o.value }))
-                        .filter(o => o.value && o.value !== '0' && !o.name.includes('--Select'));
-                }
-            """)
-
-            if not companies:
-                print("No companies found in the CDSC dropdown.")
+            # 1. Open the company dropdown
+            try:
+                # CDSC uses an Angular ng-select component
+                page.wait_for_selector("ng-select", timeout=15000)
+                page.click("ng-select")
+                page.wait_for_timeout(1000)
+                
+                # Click the first option in the list (The latest IPO)
+                page.click(".ng-option:first-child, .ng-option")
+                page.wait_for_timeout(1000)
+                
+                # Get the name of the selected company for logging
+                company_name = page.inner_text("ng-select").strip().split('\n')[0]
+                print(f"Latest Company Selected: {company_name}")
+            except Exception as e:
+                print(f"Error selecting company: {e}")
                 return
 
-            print(f"Found {len(companies)} companies on CDSC portal.")
-            
-            # We check the top 3 companies by default to ensure we hit the latest ones
-            # (Users can adjust this if they need older ones)
-            target_companies = companies[:3] 
-
-            for company_obj in target_companies:
-                company_name = company_obj['name']
-                company_id = company_obj['value']
-                print(f"\n--- Checking Official Result for: {company_name} ---")
+            # Now check for each account
+            for account in accounts:
+                username = account.get('MEROSHARE_USER')
+                boid = account.get('BOID')
                 
-                for account in accounts:
-                    username = account.get('MEROSHARE_USER')
-                    boid = account.get('BOID')
-                    
-                    if not boid:
-                        print(f"[{username}] Skipping: No BOID.")
-                        continue
+                if not boid:
+                    print(f"[{username}] Skipping: No BOID.")
+                    continue
 
-                    # Try to solve and submit
-                    success_found = False
-                    for attempt in range(3): # Outer loop for entire form retry
-                        try:
-                            # Select Company
-                            page.select_option("select#company, select[name='companyID']", value=company_id)
+                # 2. Get Applied IPOs for this account to see if they match the portal
+                # In a real run, we might fetch this from the DB or a quick MeroShare check
+                # For now, we'll check the DB for 'Applied' status logs
+                applied_companies = []
+                if os.getenv("DATABASE_URL"):
+                    try:
+                        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+                        cur = conn.cursor()
+                        # Get companies applied for in the last 30 days
+                        cur.execute("""
+                            SELECT DISTINCT company_name FROM automation_applicationlog 
+                            WHERE account_id = %s AND status = 'Applied'
+                            AND timestamp > NOW() - INTERVAL '30 days'
+                        """, (account.get('ID'),))
+                        applied_companies = [row[0].lower() for row in cur.fetchall()]
+                        cur.close()
+                        conn.close()
+                    except: pass
+
+                # SMART MATCH: Check if the portal's top company is in our applied list
+                # Use fuzzy matching or partial string matching
+                is_match = any(applied_comp in company_name.lower() or company_name.lower() in applied_comp 
+                               for applied_comp in applied_companies)
+                
+                if not is_match and applied_companies:
+                    print(f"[{username}] Skipping: Latest portal IPO ({company_name}) does not match any recent applications.")
+                    continue
+                elif not applied_companies:
+                    print(f"[{username}] No recent application history found in DB. Checking anyway as fallback...")
+
+                # Try to solve and submit
+                success_found = False
+                for attempt in range(5): # Outer loop for entire form retry
+                    try:
+                        # 1. Fill BOID
+                        page.fill("input#boid, input[name='boid']", boid)
+                        
+                        # 2. Solve Captcha
+                        captcha_code = solve_captcha(page, reader)
+                        if not captcha_code:
+                            print(f"  [{username}] Could not solve captcha. Skipping account.")
+                            break
                             
-                            # Fill BOID
-                            page.fill("input#boid, input[name='boid']", boid)
-                            
-                            # Solve Captcha
-                            captcha_code = solve_captcha(page, reader)
-                            if not captcha_code:
-                                print(f"  [{username}] Could not solve captcha. Skipping account.")
-                                break
-                                
-                            page.fill("input#captcha, input[name='userCaptcha']", captcha_code)
-                            
-                            # Submit
-                            page.click("button[type='submit'], .btn-submit")
-                            page.wait_for_timeout(2000)
-                            
-                            # Check for result or error
-                            res_info = page.evaluate("""
-                                () => {
-                                    const bodyText = document.body.innerText.toLowerCase();
-                                    // Official CDSC result messages
-                                    if (bodyText.includes("congratulations") || bodyText.includes("allotted")) {
-                                        // Try to find the specific message
-                                        const msg = document.querySelector('.text-success, h3, p')?.innerText || "Allotted";
-                                        return "Allotted|" + msg;
-                                    }
-                                    if (bodyText.includes("not allotted") || bodyText.includes("sorry")) {
-                                        return "Not Allotted|Sorry, you are not allotted for this IPO.";
-                                    }
-                                    if (bodyText.includes("invalid captcha")) {
-                                        return "RETRY_CAPTCHA|Invalid Captcha";
-                                    }
-                                    return "Unknown|No result detected";
+                        page.fill("input#captcha, input[name='userCaptcha']", captcha_code)
+                        
+                        # 3. Submit
+                        page.click("button[type='submit'], .btn-submit")
+                        page.wait_for_timeout(3000)
+                        
+                        # 4. Check for result or error
+                        res_info = page.evaluate("""
+                            () => {
+                                const bodyText = document.body.innerText.toLowerCase();
+                                if (bodyText.includes("congratulations") || bodyText.includes("allotted")) {
+                                    const msg = document.querySelector('.text-success, h3, p')?.innerText || "Allotted";
+                                    return "Allotted|" + msg;
                                 }
-                            """)
+                                if (bodyText.includes("not allotted") || bodyText.includes("sorry")) {
+                                    return "Not Allotted|Sorry, you are not allotted for this IPO.";
+                                }
+                                if (bodyText.includes("invalid captcha")) {
+                                    return "RETRY_CAPTCHA|Invalid Captcha";
+                                }
+                                return "Unknown|No result detected";
+                            }
+                        """)
+                        
+                        if res_info.startswith("RETRY_CAPTCHA"):
+                            print(f"  [{username}] AI misread captcha. Retrying...")
+                            # Clear fields and refresh captcha if needed
+                            page.click(".fa-refresh, .refresh-captcha")
+                            page.wait_for_timeout(1000)
+                            continue
+                        
+                        status_category, feedback = res_info.split("|", 1)
+                        print(f"[{username}] Result: {status_category} - {feedback}")
+                        
+                        if status_category != "Unknown":
+                            send_push_notification(account.get('TOKENS'), username, f"{company_name}: {feedback}")
+                            # Save to DB
+                            if os.getenv("DATABASE_URL"):
+                                try:
+                                    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+                                    cur = conn.cursor()
+                                    cur.execute("""
+                                        INSERT INTO automation_applicationlog
+                                            (account_id, company_name, status, remark, timestamp, is_read)
+                                        VALUES (%s, %s, %s, %s, %s, %s)
+                                    """, (account.get('ID'), company_name, status_category, feedback,
+                                          datetime.datetime.now(datetime.timezone.utc), (status_category == "Allotted")))
+                                    conn.commit()
+                                    cur.close()
+                                    conn.close()
+                                except: pass
                             
-                            if res_info.startswith("RETRY_CAPTCHA"):
-                                print(f"  [{username}] AI misread captcha. Retrying...")
-                                continue
-                            
-                            status_category, feedback = res_info.split("|", 1)
-                            print(f"[{username}] Result: {status_category} - {feedback}")
-                            
-                            if status_category != "Unknown":
-                                send_push_notification(account.get('TOKENS'), username, feedback)
-                                # Save to DB
-                                if os.getenv("DATABASE_URL"):
-                                    try:
-                                        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-                                        cur = conn.cursor()
-                                        cur.execute("""
-                                            INSERT INTO automation_applicationlog
-                                                (account_id, company_name, status, remark, timestamp, is_read)
-                                            VALUES (%s, %s, %s, %s, %s, %s)
-                                        """, (account.get('ID'), company_name, status_category, feedback,
-                                              datetime.datetime.now(datetime.timezone.utc), (status_category == "Allotted")))
-                                        conn.commit()
-                                        cur.close()
-                                        conn.close()
-                                    except: pass
-                                
-                                success_found = True
-                                break
-                            
-                        except Exception as e:
-                            print(f"  [{username}] Error: {e}")
-                            
-                    if not success_found:
-                         print(f"  [{username}] Could not verify result after multiple attempts.")
-                    
-                    # Small delay between accounts
-                    page.wait_for_timeout(1000)
+                            success_found = True
+                            # Reset for next account
+                            page.click("button:has-text('Reset'), .btn-reset")
+                            page.wait_for_timeout(1000)
+                            break
+                        
+                    except Exception as e:
+                        print(f"  [{username}] Error: {e}")
+                        page.reload()
+                        page.wait_for_timeout(3000)
+                        
+                if not success_found:
+                     print(f"  [{username}] Could not verify result after multiple attempts.")
+                
+                # Small delay between accounts
+                page.wait_for_timeout(1000)
 
         except Exception as e:
             print(f"Error during status check: {e}")
