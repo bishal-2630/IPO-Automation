@@ -11,12 +11,18 @@ import datetime
 import psycopg2
 import logging
 from notifications import send_email_notification, send_push_notification
+import firebase_admin
+from firebase_admin import credentials, messaging
 from bank_checkers.bank import check_balance
 from expiry_handler import (
     detect_account_expiry,
     check_account_expiry_warning,
     handle_expired_account,
 )
+import easyocr
+import numpy as np
+from PIL import Image
+import io
 
 # Silence playwright logs
 logging.getLogger('playwright').setLevel(logging.ERROR)
@@ -1265,17 +1271,71 @@ def run_automation():
 
 
 
+def solve_captcha(page, reader, max_retries=5):
+    """
+    Solves the CDSC IPO Result captcha using EasyOCR.
+    """
+    for attempt in range(max_retries):
+        try:
+            print(f"  [Captcha] Attempt {attempt + 1}/{max_retries}...")
+            
+            # Locate the captcha image
+            # The CDSC portal usually has the image next to the input
+            captcha_img = page.locator("img").filter(has_attribute=("src", re.compile(r"captcha", re.I))).first
+            if not captcha_img.is_visible():
+                # Fallback: find any image near the captcha input
+                captcha_img = page.locator("input#captcha + img, .captcha-image img").first
+            
+            if not captcha_img.is_visible():
+                print("  ⚠️ Captcha image not found. Refreshing page...")
+                page.reload()
+                page.wait_for_timeout(2000)
+                continue
+
+            # Take a screenshot of the captcha element
+            img_bytes = captcha_img.screenshot()
+            
+            # Use EasyOCR to read text
+            # CDSC captchas are usually 5 digits
+            results = reader.readtext(img_bytes)
+            
+            if results:
+                # Filter for digits only
+                raw_text = results[0][1]
+                captcha_text = "".join(re.findall(r'\d', raw_text))
+                
+                if len(captcha_text) >= 5:
+                    print(f"  [Captcha] Solved: {captcha_text}")
+                    return captcha_text
+                else:
+                    print(f"  [Captcha] Read '{raw_text}' but didn't find 5 digits. Retrying...")
+            
+            # Refresh captcha if failed
+            # Look for refresh icon/button
+            refresh_btn = page.locator(".fa-refresh, button:has(i.fa-refresh), img[src*='refresh']").first
+            if refresh_btn.is_visible():
+                refresh_btn.click()
+            else:
+                page.reload()
+            
+            page.wait_for_timeout(1500)
+            
+        except Exception as e:
+            print(f"  [Captcha] Error: {e}")
+            page.wait_for_timeout(1000)
+            
+    return None
+
 def run_status_check():
     """
-    Captcha-Free Result Check: Navigates to Global IME Capital portal.
-    Checks for each account's BOID against available companies.
+    Official CDSC Portal Result Check (With AI Captcha Solving).
     """
     accounts = get_accounts()
     if not accounts:
         print("Error: No accounts found.")
         return
 
-    print(f"🔍 Status Check (Captcha-Free): Processing {len(accounts)} account(s)...")
+    print(f"🔍 Official CDSC Status Check: Processing {len(accounts)} account(s)...")
 
     with sync_playwright() as p:
         headless = os.getenv("HEADLESS", "true").lower() == "true"
@@ -1283,205 +1343,142 @@ def run_status_check():
             headless=headless,
             args=['--no-sandbox', '--disable-setuid-sandbox']
         )
-        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={'width': 1280, 'height': 720}
+        )
         page = context.new_page()
+        
+        # Initialize OCR Reader (Done once per run)
+        print("  [AI] Initializing EasyOCR...")
+        reader = easyocr.Reader(['en'], gpu=False)
 
         try:
-            url = "https://globalimecapital.com/ipo-fpo-share-allotment-check"
+            url = "https://iporesult.cdsc.com.np/"
             print(f"Navigating to {url}...")
             page.goto(url, timeout=60000, wait_until='networkidle')
             page.wait_for_timeout(3000)
             
-            # 1. Locate the company dropdown specifically
-            try:
-                # Target the button that is a descendant of the section containing "Choose Company"
-                # This avoids the Log In/Demat Account buttons in the header.
-                combobox = page.locator("main button[role='combobox'], .container button[role='combobox']").filter(has_text="company").first
-                if not combobox.is_visible():
-                    # Fallback to the specific parent structure
-                    combobox = page.locator("div:has(label:has-text('Choose Company')) button[role='combobox']").first
-                
-                page.wait_for_selector("div:has(label:has-text('Choose Company')) button[role='combobox']", timeout=15000)
-                
-                combobox.click(force=True)
-                page.wait_for_timeout(1000)
-                
-                # Get options
-                page.wait_for_selector("[role='option']", timeout=10000)
-                companies = page.evaluate("""
-                    () => {
-                        const items = Array.from(document.querySelectorAll('[role="option"]'));
-                        return items.map(el => ({ 
-                            name: el.innerText.trim(),
-                            id: el.id
-                        })).filter(o => o.name && !o.name.includes('--Select'));
-                    }
-                """)
-            except Exception as e:
-                print(f"Error: Global IME page layout changed or not loaded: {e}")
-                page.screenshot(path="globalime_layout_error.png")
-                return
+            # 1. Get available companies from dropdown
+            page.wait_for_selector("select#company, select[name='companyID']", timeout=15000)
+            companies = page.evaluate("""
+                () => {
+                    const select = document.querySelector('select#company, select[name="companyID"]');
+                    if (!select) return [];
+                    return Array.from(select.options)
+                        .map(o => ({ name: o.innerText.trim(), value: o.value }))
+                        .filter(o => o.value && o.value !== '0' && !o.name.includes('--Select'));
+                }
+            """)
 
             if not companies:
-                print("No companies found in the list.")
+                print("No companies found in the CDSC dropdown.")
                 return
 
-            print(f"Found {len(companies)} companies. Checking latest results...")
+            print(f"Found {len(companies)} companies on CDSC portal.")
             
-            # Check the top 1 company for each account
-            target_companies = companies[:1] 
+            # We check the top 3 companies by default to ensure we hit the latest ones
+            # (Users can adjust this if they need older ones)
+            target_companies = companies[:3] 
 
             for company_obj in target_companies:
                 company_name = company_obj['name']
-                print(f"\n--- Checking Result for: {company_name} ---")
+                company_id = company_obj['value']
+                print(f"\n--- Checking Official Result for: {company_name} ---")
                 
                 for account in accounts:
                     username = account.get('MEROSHARE_USER')
                     boid = account.get('BOID')
-                    feedback = ""
                     
                     if not boid:
-                        print(f"[{username}] Skipping: No BOID provided.")
+                        print(f"[{username}] Skipping: No BOID.")
                         continue
 
-                    # (Existing DB check logic remains...)
-                    if os.getenv("DATABASE_URL"):
+                    # Try to solve and submit
+                    success_found = False
+                    for attempt in range(3): # Outer loop for entire form retry
                         try:
-                            # ... (existing DB check code)
-                            pass
-                        except: pass
-
-                    print(f"[{username}] Checking BOID: {boid}...")
-                    
-                    # 1. Select company from dropdown
-                    try:
-                        # Find the correct combobox in the Allotment Check section
-                        combobox = page.locator("div:has(label:has-text('Choose Company')) button[role='combobox']").first
-                        combobox.click(force=True)
-                        page.wait_for_timeout(1500)
-                        
-                        # Use evaluate to click and trigger events for Vue.js
-                        page.evaluate(f"""
-                            (name) => {{
-                                const opts = Array.from(document.querySelectorAll('[role="option"]'));
-                                const target = opts.find(o => o.innerText.includes(name));
-                                if (target) {{
-                                    target.scrollIntoView();
-                                    // Dispatch sequence to trigger state updates
-                                    ['mousedown', 'mouseup', 'click'].forEach(evt => {{
-                                        target.dispatchEvent(new MouseEvent(evt, {{
-                                            view: window,
-                                            bubbles: true,
-                                            cancelable: true,
-                                            buttons: 1
-                                        }}));
-                                    }});
-                                }}
-                            }}
-                        """, company_name)
-                        page.wait_for_timeout(1500)
-                        
-                        # Verify selection
-                        selected_text = combobox.inner_text().strip()
-                        if company_name[:10].lower() not in selected_text.lower():
-                            print(f"  Warning: Selection might have failed. Selected text: '{selected_text}'")
-                    except Exception as select_err:
-                        print(f"  Warning: Failed to select company: {select_err}")
-                    
-                    # 2. Fill BOID
-                    try:
-                        boid_input = page.locator("div:has(label:has-text('BOID')) input").first
-                        boid_input.fill(boid)
-                        page.wait_for_timeout(500)
-                    except Exception as e:
-                        print(f"  Warning: BOID fill error: {e}")
-                    
-                    # 3. Click Check Result
-                    try:
-                        check_btn = page.locator('button:has-text("Check Result")').first
-                        check_btn.click(force=True)
-                        # Specific wait for any network or DOM change
-                        page.wait_for_timeout(5000)
-                    except Exception as e:
-                        print(f"  Warning: Check button click error: {e}")
-                    
-                    # 4. Wait for result message and extract status
-                    res_info = page.evaluate("""
-                        () => {
-                            const resultDiv = document.querySelector('.mt-6.text-center.text-text-secondary') || 
-                                              document.querySelector('.text-center.text-text-secondary');
+                            # Select Company
+                            page.select_option("select#company, select[name='companyID']", value=company_id)
                             
-                            if (resultDiv && resultDiv.innerText.trim().length > 5) {
-                                const text = resultDiv.innerText.trim();
-                                if (text.toLowerCase().includes("congratulations") || text.toLowerCase().includes("allotted")) {
-                                    return "Allotted|" + text;
+                            # Fill BOID
+                            page.fill("input#boid, input[name='boid']", boid)
+                            
+                            # Solve Captcha
+                            captcha_code = solve_captcha(page, reader)
+                            if not captcha_code:
+                                print(f"  [{username}] Could not solve captcha. Skipping account.")
+                                break
+                                
+                            page.fill("input#captcha, input[name='userCaptcha']", captcha_code)
+                            
+                            # Submit
+                            page.click("button[type='submit'], .btn-submit")
+                            page.wait_for_timeout(2000)
+                            
+                            # Check for result or error
+                            res_info = page.evaluate("""
+                                () => {
+                                    const bodyText = document.body.innerText.toLowerCase();
+                                    // Official CDSC result messages
+                                    if (bodyText.includes("congratulations") || bodyText.includes("allotted")) {
+                                        // Try to find the specific message
+                                        const msg = document.querySelector('.text-success, h3, p')?.innerText || "Allotted";
+                                        return "Allotted|" + msg;
+                                    }
+                                    if (bodyText.includes("not allotted") || bodyText.includes("sorry")) {
+                                        return "Not Allotted|Sorry, you are not allotted for this IPO.";
+                                    }
+                                    if (bodyText.includes("invalid captcha")) {
+                                        return "RETRY_CAPTCHA|Invalid Captcha";
+                                    }
+                                    return "Unknown|No result detected";
                                 }
-                                if (text.toLowerCase().includes("no ipo/fpo allotment found") || text.toLowerCase().includes("not allotted")) {
-                                    return "Not Allotted|" + text;
-                                }
-                                return "Unknown|" + text;
-                            }
-                            return "NotFound|No result container found";
-                        }
-                    """)
+                            """)
+                            
+                            if res_info.startswith("RETRY_CAPTCHA"):
+                                print(f"  [{username}] AI misread captcha. Retrying...")
+                                continue
+                            
+                            status_category, feedback = res_info.split("|", 1)
+                            print(f"[{username}] Result: {status_category} - {feedback}")
+                            
+                            if status_category != "Unknown":
+                                send_push_notification(account.get('TOKENS'), username, feedback)
+                                # Save to DB
+                                if os.getenv("DATABASE_URL"):
+                                    try:
+                                        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+                                        cur = conn.cursor()
+                                        cur.execute("""
+                                            INSERT INTO automation_applicationlog
+                                                (account_id, company_name, status, remark, timestamp, is_read)
+                                            VALUES (%s, %s, %s, %s, %s, %s)
+                                        """, (account.get('ID'), company_name, status_category, feedback,
+                                              datetime.datetime.now(datetime.timezone.utc), (status_category == "Allotted")))
+                                        conn.commit()
+                                        cur.close()
+                                        conn.close()
+                                    except: pass
+                                
+                                success_found = True
+                                break
+                            
+                        except Exception as e:
+                            print(f"  [{username}] Error: {e}")
+                            
+                    if not success_found:
+                         print(f"  [{username}] Could not verify result after multiple attempts.")
                     
-                    if res_info.startswith("Not Allotted"):
-                        status_category = "Not Allotted"
-                        feedback = res_info.split("|", 1)[1]
-                    elif res_info.startswith("Allotted"):
-                        status_category = "Allotted"
-                        feedback = res_info.split("|", 1)[1]
-                        # Try to extract Kitta
-                        kitta_match = re.search(r'(\d+)\s*Kitta', feedback, re.IGNORECASE)
-                        if kitta_match:
-                            feedback = f"Congratulations!! {company_name} IPO has been allotted ({kitta_match.group(1)} Kitta)."
-                    else:
-                        status_category = "Unknown"
-                        feedback = res_info.split("|", 1)[1]
-                        # Final fallback for generic messages if the above failed
-                        if "congratulations" in feedback.lower(): # Still check the specific container text
-                             status_category = "Allotted"
-
-                    print(f"[{username}] Result: {feedback}")
-                    
-                    if status_category == "Not Allotted":
-                        send_push_notification(account.get('TOKENS'), username, feedback)
-                    elif status_category == "Allotted":
-                        send_push_notification(account.get('TOKENS'), username, feedback)
-
-                    # Reset/Clear for next check
-                    # We can click a "Reset" button if it exists or just clear the input
-                    reset_btn = page.locator('button:has-text("Reset")').first
-                    if reset_btn.is_visible():
-                        reset_btn.click()
-                        page.wait_for_timeout(500)
-                    else:
-                        boid_input.fill("")
-                        page.wait_for_timeout(300)
-
-                    # Save to Database Log
-                    if os.getenv("DATABASE_URL") and status_category != "Unknown":
-                        try:
-                            conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-                            cur = conn.cursor()
-                            is_read = True if status_category == "Allotted" else False
-                            cur.execute("""
-                                INSERT INTO automation_applicationlog
-                                    (account_id, company_name, status, remark, timestamp, is_read)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                            """, (account.get('ID'), company_name, status_category, feedback,
-                                  datetime.datetime.now(datetime.timezone.utc), is_read))
-                            conn.commit()
-                            cur.close()
-                            conn.close()
-                        except Exception as db_err:
-                            print(f"Warning: Failed to save status log for {username}: {db_err}")
+                    # Small delay between accounts
+                    page.wait_for_timeout(1000)
 
         except Exception as e:
             print(f"Error during status check: {e}")
-            page.screenshot(path="status_check_error.png")
         finally:
             browser.close()
+    
+    print("\nOfficial CDSC status check run complete.")
     
     print("\nGlobal IME status check run complete.")
 
