@@ -18,4 +18,4 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           git config lfs.allowincompletepush true
-          git push --force https://Bishal26:$HF_TOKEN@huggingface.co/spaces/Bishal26/ipo_automation.git user-part-1:main
+          git push --force https://Bishall10:$HF_TOKEN@huggingface.co/spaces/Bishall10/IPO_Automation.git user-part-1:main
