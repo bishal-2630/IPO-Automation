@@ -15,15 +15,15 @@ def _get_cipher() -> Fernet:
     key = os.environ.get("ENCRYPTION_KEY", "").strip()
     if not key:
         raise RuntimeError(
-            "ENCRYPTION_KEY environment variable is missing in Vercel. "
-            "Go to Settings -> Environment Variables and ensure it is added to 'All Environments'."
+            "ENCRYPTION_KEY environment variable is missing. "
+            "Please add it to your Hugging Face Space Secrets or .env file."
         )
     try:
         return Fernet(key.encode())
     except Exception as e:
         raise RuntimeError(
-            f"Invalid ENCRYPTION_KEY format (Length: {len(key)}). "
-            f"Error: {str(e)}. Please ensure you pasted the exact 44-character key into Vercel settings."
+            f"Invalid ENCRYPTION_KEY format. "
+            f"Error: {str(e)}. Please ensure you are using a valid 44-character Fernet key."
         )
 
 
