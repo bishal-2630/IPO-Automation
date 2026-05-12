@@ -38,14 +38,16 @@ def send_email_notification(to_email, subject, message):
         msg["Subject"] = subject
         msg.attach(MIMEText(message, "plain"))
 
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(sender_email, sender_password)
-            server.send_message(msg)
-
-        print(f"Email Notification Sent to {to_email}")
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+        server.quit()
+        print(f"✅ Email sent successfully to {to_email}")
+        return True
     except Exception as e:
-        print(f"Warning: Failed to send email notification to {to_email}: {e}")
+        print(f"❌ SMTP Error: {str(e)}")
+        return False
 
 
 def send_push_notification(tokens, title, body):
