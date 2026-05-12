@@ -20,7 +20,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.red),
+      SnackBar(content: Text(message.replaceAll('Exception: ', '')), backgroundColor: Colors.red),
     );
   }
 
@@ -41,15 +41,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     FocusScope.of(context).unfocus();
 
     try {
-      final response = await _apiService.requestPasswordReset(email);
-      if (response['error'] == null) {
-        _showSuccess('Reset code sent to your email');
-        setState(() => _currentStep = 1);
-      } else {
-        _showError(response['error']);
-      }
+      await _apiService.requestPasswordReset(email);
+      _showSuccess('Reset code sent to your email');
+      setState(() => _currentStep = 1);
     } catch (e) {
-      _showError('Connection error. Please try again.');
+      _showError(e.toString());
     } finally {
       setState(() => _isLoading = false);
     }
@@ -67,19 +63,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
     try {
       // Calling confirm endpoint without password only verifies the OTP
-      final response = await _apiService.confirmPasswordReset(
+      await _apiService.confirmPasswordReset(
         _emailController.text.trim(),
         otp,
         '', 
       );
-
-      if (response['error'] == null) {
-        setState(() => _currentStep = 2);
-      } else {
-        _showError(response['error']);
-      }
+      setState(() => _currentStep = 2);
     } catch (e) {
-      _showError('Verification failed. Try again.');
+      _showError(e.toString());
     } finally {
       setState(() => _isLoading = false);
     }
@@ -103,20 +94,15 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     FocusScope.of(context).unfocus();
 
     try {
-      final response = await _apiService.confirmPasswordReset(
+      await _apiService.confirmPasswordReset(
         _emailController.text.trim(),
         _otpController.text.trim(),
         password,
       );
-
-      if (response['error'] == null) {
-        _showSuccess('Password reset successfully!');
-        Navigator.pop(context); // Go back to Login
-      } else {
-        _showError(response['error']);
-      }
+      _showSuccess('Password reset successfully!');
+      Navigator.pop(context); // Go back to Login
     } catch (e) {
-      _showError('Failed to reset password. Try again.');
+      _showError(e.toString());
     } finally {
       setState(() => _isLoading = false);
     }
@@ -157,7 +143,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               ElevatedButton(
                 onPressed: _isLoading ? null : _requestCode,
                 style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
-                child: _isLoading ? const CircularProgressIndicator() : const Text('Send Reset Code'),
+                child: _isLoading 
+                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
+                    : const Text('Send Reset Code'),
               ),
             ],
 
@@ -177,7 +165,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               ElevatedButton(
                 onPressed: _isLoading ? null : _verifyOtp,
                 style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
-                child: _isLoading ? const CircularProgressIndicator() : const Text('Verify Code'),
+                child: _isLoading 
+                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
+                    : const Text('Verify Code'),
               ),
               TextButton(
                 onPressed: () => setState(() => _currentStep = 0),
@@ -209,7 +199,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               ElevatedButton(
                 onPressed: _isLoading ? null : _resetPassword,
                 style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
-                child: _isLoading ? const CircularProgressIndicator() : const Text('Update Password'),
+                child: _isLoading 
+                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
+                    : const Text('Update Password'),
               ),
             ],
           ],
