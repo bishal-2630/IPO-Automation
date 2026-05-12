@@ -193,9 +193,17 @@ class ApiService {
       headers: {'Content-Type': 'application/json'},
       body: json.encode({'email': email}),
     );
+    
     if (response.statusCode != 200) {
-      final error = json.decode(response.body)['error'] ?? 'Failed to send OTP';
-      throw Exception(error);
+      String errorMessage = 'Failed to send OTP';
+      try {
+        final body = json.decode(response.body);
+        errorMessage = body['error'] ?? body['status'] ?? errorMessage;
+      } catch (e) {
+        // If not JSON, it might be an HTML error page
+        errorMessage = 'Server Error (${response.statusCode})';
+      }
+      throw Exception(errorMessage);
     }
   }
 
@@ -209,9 +217,16 @@ class ApiService {
         'new_password': newPassword,
       }),
     );
+
     if (response.statusCode != 200) {
-      final error = json.decode(response.body)['error'] ?? 'Failed to reset password';
-      throw Exception(error);
+      String errorMessage = 'Failed to reset password';
+      try {
+        final body = json.decode(response.body);
+        errorMessage = body['error'] ?? body['status'] ?? errorMessage;
+      } catch (e) {
+        errorMessage = 'Server Error (${response.statusCode})';
+      }
+      throw Exception(errorMessage);
     }
   }
 }
