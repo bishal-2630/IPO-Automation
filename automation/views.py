@@ -14,8 +14,12 @@ from rest_framework import serializers, viewsets, status
 from rest_framework.serializers import ModelSerializer
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from .models import Account, ApplicationLog, FCMToken, Profile
+from .models import Account, ApplicationLog, FCMToken, Profile, PasswordResetOTP
+from notifications import send_email_notification
 import os
+import random
+from django.utils import timezone
+from datetime import timedelta
 
 
 class UserSerializer(ModelSerializer):
@@ -120,6 +124,74 @@ class DeleteUserView(APIView):
         user = request.user
         user.delete()
         return Response({"status": "User account deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+
+
+class RequestPasswordResetView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        email = request.data.get('email')
+        if not email:
+            return Response({"error": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            user = User.objects.get(email=email)
+            otp = str(random.randint(100000, 999999))
+            
+            # Save OTP
+            PasswordResetOTP.objects.filter(user=user).delete() # Clear old ones
+            PasswordResetOTP.objects.create(user=user, otp=otp)
+            
+            # Send Email
+            subject = "IPO Automation - Password Reset Code"
+            message = f"Hello,\n\nYour password reset code is: {otp}\n\nThis code will expire in 10 minutes."
+            send_email_notification(email, subject, message)
+            
+            return Response({"status": "OTP sent to your email"}, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            # We return 200 even if user doesn't exist for security (avoiding email enumeration)
+            return Response({"status": "OTP sent to your email if it exists"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ConfirmPasswordResetView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        email = request.data.get('email')
+        otp = request.data.get('otp')
+        new_password = request.data.get('new_password')
+        
+        if not all([email, otp, new_password]):
+            return Response({"error": "All fields are required"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            user = User.objects.get(email=email)
+            otp_obj = PasswordResetOTP.objects.filter(user=user, otp=otp).first()
+            
+            if not otp_obj:
+                return Response({"error": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
+                
+            # Check expiration (10 minutes)
+            if timezone.now() > otp_obj.created_at + timedelta(minutes=10):
+                otp_obj.delete()
+                return Response({"error": "OTP has expired"}, status=status.HTTP_400_BAD_REQUEST)
+                
+            # Success: Change Password
+            user.set_password(new_password)
+            user.save()
+            
+            # Clean up
+            otp_obj.delete()
+            return Response({"status": "Password reset successfully"}, status=status.HTTP_200_OK)
+            
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class ManualTriggerView(APIView):

@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     AccountViewSet, ApplicationLogViewSet, RegisterView, LoginView,
     FCMTokenViewSet, ManualTriggerView, SecureTriggerView, HealthView,
-    UserProfileView, DeleteUserView,
+    UserProfileView, DeleteUserView, RequestPasswordResetView, ConfirmPasswordResetView,
 )
 
 router = DefaultRouter()
@@ -17,6 +17,8 @@ urlpatterns = [
     path('auth/login/', LoginView.as_view(), name='login'),
     path('auth/profile/', UserProfileView.as_view(), name='profile'),
     path('auth/delete-account/', DeleteUserView.as_view(), name='delete-account'),
+    path('auth/password-reset-request/', RequestPasswordResetView.as_view(), name='password-reset-request'),
+    path('auth/password-reset-confirm/', ConfirmPasswordResetView.as_view(), name='password-reset-confirm'),
     path('run-all/', ManualTriggerView.as_view(), name='run-all'),
     path('trigger-automation/', SecureTriggerView.as_view(), name='secure-trigger'),
     path('health/', HealthView.as_view(), name='health'),

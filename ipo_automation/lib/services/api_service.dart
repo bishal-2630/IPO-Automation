@@ -186,4 +186,32 @@ class ApiService {
       throw Exception('Failed to delete user account');
     }
   }
+
+  Future<void> requestPasswordReset(String email) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/password-reset-request/'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'email': email}),
+    );
+    if (response.statusCode != 200) {
+      final error = json.decode(response.body)['error'] ?? 'Failed to send OTP';
+      throw Exception(error);
+    }
+  }
+
+  Future<void> confirmPasswordReset(String email, String otp, String newPassword) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/password-reset-confirm/'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'email': email,
+        'otp': otp,
+        'new_password': newPassword,
+      }),
+    );
+    if (response.statusCode != 200) {
+      final error = json.decode(response.body)['error'] ?? 'Failed to reset password';
+      throw Exception(error);
+    }
+  }
 }
