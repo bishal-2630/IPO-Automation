@@ -13,11 +13,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='applicationlog',
-            name='is_listed',
-            field=models.BooleanField(default=False),
-        ),
         migrations.CreateModel(
             name='PasswordResetOTP',
             fields=[
