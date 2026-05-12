@@ -19,10 +19,7 @@ from expiry_handler import (
     check_account_expiry_warning,
     handle_expired_account,
 )
-import easyocr
-import numpy as np
-from PIL import Image
-import io
+# OCR imports moved to local scope in run_status_check to avoid global dependency issues
 
 # Silence playwright logs
 logging.getLogger('playwright').setLevel(logging.ERROR)
@@ -1350,6 +1347,7 @@ def run_status_check():
         page = context.new_page()
         
         # Initialize OCR Reader (Done once per run)
+        import easyocr
         print("  [AI] Initializing EasyOCR...")
         reader = easyocr.Reader(['en'], gpu=False)
 
