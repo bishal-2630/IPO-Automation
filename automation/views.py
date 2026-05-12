@@ -144,7 +144,7 @@ class RequestPasswordResetView(APIView):
             PasswordResetOTP.objects.create(user=user, otp=otp)
             
             # Send Email
-            subject = "🔒 IPO Automation - OTP Code"
+            subject = "IPO Automation - OTP Code"
             message = (
                 f"Hello,\n\n"
                 f"You recently requested to reset your password for your IPO Automation account. "
@@ -194,8 +194,8 @@ class ConfirmPasswordResetView(APIView):
             reset_otp.delete()
             return Response({"status": "Password reset successfully"}, status=status.HTTP_200_OK)
             
-        except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        except (User.DoesNotExist, PasswordResetOTP.DoesNotExist):
+            return Response({"error": "Invalid email or OTP code"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../services/api_service.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
@@ -10,7 +12,8 @@ class ForgotPasswordScreen extends StatefulWidget {
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _emailController = TextEditingController();
-  final _otpController = TextEditingController();
+  final List<TextEditingController> _otpControllers = List.generate(6, (_) => TextEditingController());
+  final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _apiService = ApiService();
@@ -18,6 +21,35 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   int _currentStep = 0; // 0: Email, 1: OTP, 2: New Password
   bool _isLoading = false;
   bool _isPasswordVisible = false;
+  
+  Timer? _timer;
+  int _secondsRemaining = 60;
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    for (var controller in _otpControllers) {
+      controller.dispose();
+    }
+    for (var node in _focusNodes) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  void _startTimer() {
+    _secondsRemaining = 60;
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        if (_secondsRemaining > 0) {
+          _secondsRemaining--;
+        } else {
+          _timer?.cancel();
+        }
+      });
+    });
+  }
 
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -53,6 +85,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       await _apiService.requestPasswordReset(email);
       _showSuccess('OTP code sent to your email');
       setState(() => _currentStep = 1);
+      _startTimer();
     } catch (e) {
       _showError(e.toString());
     } finally {
@@ -61,9 +94,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   }
 
   Future<void> _verifyOtp() async {
-    final otp = _otpController.text.trim();
+    String otp = _otpControllers.map((c) => c.text).join();
     if (otp.length != 6) {
-      _showError('Please enter the 6-digit code');
+      _showError('Please enter the full 6-digit code');
       return;
     }
 
@@ -73,6 +106,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     try {
       await _apiService.confirmPasswordReset(_emailController.text.trim(), otp, '');
       _showSuccess('Code verified! Set your new password.');
+      _timer?.cancel();
       setState(() => _currentStep = 2);
     } catch (e) {
       _showError(e.toString());
@@ -98,9 +132,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     FocusScope.of(context).unfocus();
 
     try {
+      String otp = _otpControllers.map((c) => c.text).join();
       await _apiService.confirmPasswordReset(
         _emailController.text.trim(),
-        _otpController.text.trim(),
+        otp,
         password,
       );
       _showSuccess('Password reset successfully!');
@@ -143,7 +178,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                     _currentStep == 0 
                         ? Icons.mail_outline_rounded 
                         : _currentStep == 1 
-                            ? Icons.pin_outlined 
+                            ? Icons.timer_outlined 
                             : Icons.lock_reset_rounded,
                     size: 80,
                     color: Colors.deepPurpleAccent.shade100,
@@ -153,7 +188,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                     _currentStep == 0 
                         ? "OTP Code" 
                         : _currentStep == 1 
-                            ? "Verify Code" 
+                            ? "Enter OTP" 
                             : "New Password",
                     style: const TextStyle(
                       fontSize: 28,
@@ -167,7 +202,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                     _currentStep == 0 
                         ? "Enter your email to receive an OTP code" 
                         : _currentStep == 1 
-                            ? "Enter the 6-digit OTP code sent to your email" 
+                            ? "Enter the 6-digit code sent to your email" 
                             : "Enter and confirm your new password",
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 14, color: Colors.grey.shade400),
@@ -202,20 +237,38 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                         ],
 
                         if (_currentStep == 1) ...[
-                          _buildTextField(
-                            controller: _otpController,
-                            label: "6-Digit Code",
-                            icon: Icons.vpn_key_outlined,
-                            keyboardType: TextInputType.number,
-                            maxLength: 6,
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: List.generate(6, (index) => _buildOtpBox(index)),
                           ),
-                          const SizedBox(height: 32),
+                          const SizedBox(height: 24),
+                          Text(
+                            _secondsRemaining > 0 
+                                ? "Code expires in ${_secondsRemaining}s"
+                                : "Code expired",
+                            style: TextStyle(
+                              color: _secondsRemaining > 0 ? Colors.grey : Colors.redAccent,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
                           _buildSubmitButton("Verify Code", _verifyOtp),
+                          if (_secondsRemaining == 0)
+                            TextButton(
+                              onPressed: _isLoading ? null : _requestCode,
+                              child: Text(
+                                "Resend OTP",
+                                style: TextStyle(color: Colors.deepPurpleAccent.shade100),
+                              ),
+                            ),
                           TextButton(
-                            onPressed: () => setState(() => _currentStep = 0),
+                            onPressed: () => setState(() {
+                              _currentStep = 0;
+                              _timer?.cancel();
+                            }),
                             child: Text(
                               "Change Email",
-                              style: TextStyle(color: Colors.deepPurpleAccent.shade100),
+                              style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
                             ),
                           ),
                         ],
@@ -249,19 +302,55 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     );
   }
 
+  Widget _buildOtpBox(int index) {
+    return SizedBox(
+      width: 40,
+      child: TextField(
+        controller: _otpControllers[index],
+        focusNode: _focusNodes[index],
+        keyboardType: TextInputType.number,
+        textAlign: TextAlign.center,
+        maxLength: 1,
+        style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: InputDecoration(
+          counterText: "",
+          enabledBorder: OutlineInputBorder(
+            borderSide: BorderSide(color: Colors.grey.shade700),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderSide: const BorderSide(color: Colors.deepPurpleAccent, width: 2),
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+        onChanged: (value) {
+          if (value.isNotEmpty) {
+            if (index < 5) {
+              _focusNodes[index + 1].requestFocus();
+            } else {
+              _focusNodes[index].unfocus();
+              _verifyOtp();
+            }
+          } else if (value.isEmpty && index > 0) {
+            _focusNodes[index - 1].requestFocus();
+          }
+        },
+      ),
+    );
+  }
+
   Widget _buildTextField({
     required TextEditingController controller,
     required String label,
     required IconData icon,
     bool isPassword = false,
     TextInputType keyboardType = TextInputType.text,
-    int? maxLength,
   }) {
     return TextField(
       controller: controller,
       obscureText: isPassword && !_isPasswordVisible,
       keyboardType: keyboardType,
-      maxLength: maxLength,
       style: const TextStyle(color: Colors.white, fontSize: 16),
       decoration: InputDecoration(
         labelText: label,
@@ -277,7 +366,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                 onPressed: () => setState(() => _isPasswordVisible = !_isPasswordVisible),
               )
             : null,
-        counterText: "",
         enabledBorder: UnderlineInputBorder(
           borderSide: BorderSide(color: Colors.grey.shade800),
         ),
