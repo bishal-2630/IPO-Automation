@@ -22,14 +22,33 @@ def send_email_notification(to_email, subject, message):
     if not to_email:
         return
 
+    # 1. Try Google Apps Script (Web API) first - Works on Hugging Face
+    gmail_api_url = os.getenv("GMAIL_API_URL")
+    if gmail_api_url:
+        try:
+            import requests
+            response = requests.post(
+                gmail_api_url,
+                json={"to": to_email, "subject": subject, "body": message},
+                timeout=10
+            )
+            if response.status_code == 200:
+                print(f"✅ Email sent via Google Apps Script to {to_email}")
+                return True
+            else:
+                print(f"❌ Google Apps Script Error: {response.text}")
+        except Exception as e:
+            print(f"❌ Google Apps Script Exception: {str(e)}")
+
+    # 2. Fallback to SMTP
     sender_email = os.getenv("SENDER_EMAIL")
     sender_password = os.getenv("SENDER_PASSWORD")
     smtp_server = os.getenv("SMTP_SERVER") or "smtp.gmail.com"
     smtp_port = int(os.getenv("SMTP_PORT") or 465)
 
-    if not (sender_email and sender_password):
-        print("Warning: Skipping email notification (Sender credentials missing in .env)")
-        return
+    if not (sender_email and sender_password or gmail_api_url):
+        print("Warning: Skipping email notification (No SENDER_EMAIL or GMAIL_API_URL found)")
+        return False
 
     try:
         msg = MIMEMultipart()
@@ -38,12 +57,14 @@ def send_email_notification(to_email, subject, message):
         msg["Subject"] = subject
         msg.attach(MIMEText(message, "plain"))
 
-        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10)
-        server.login(sender_email, sender_password)
-        server.send_message(msg)
-        server.quit()
-        print(f"✅ Email sent successfully to {to_email}")
-        return True
+        if sender_email and sender_password:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10)
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+            server.quit()
+            print(f"✅ Email sent via SMTP to {to_email}")
+            return True
+        return False
     except Exception as e:
         print(f"❌ SMTP Error: {str(e)}")
         return False
