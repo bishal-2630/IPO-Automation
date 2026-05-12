@@ -145,8 +145,17 @@ class RequestPasswordResetView(APIView):
             PasswordResetOTP.objects.create(user=user, otp=otp)
             
             # Send Email
-            subject = "IPO Automation - Password Reset Code"
-            message = f"Hello,\n\nYour password reset code is: {otp}\n\nThis code will expire in 10 minutes."
+            subject = "🔒 IPO Automation - Password Reset Code"
+            message = (
+                f"Hello,\n\n"
+                f"You recently requested to reset your password for your IPO Automation account. "
+                f"Use the 6-digit code below to proceed:\n\n"
+                f"👉 {otp}\n\n"
+                f"This code is valid for 10 minutes. For your security, please do not share this code with anyone.\n\n"
+                f"If you did not request a password reset, you can safely ignore this email. Your account is still secure.\n\n"
+                f"Regards,\n"
+                f"The IPO Automation Team"
+            )
             send_email_notification(email, subject, message)
             
             return Response({"status": "OTP sent to your email"}, status=status.HTTP_200_OK)
