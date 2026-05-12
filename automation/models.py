@@ -70,4 +70,4 @@ class PasswordResetOTP(models.Model):
     def is_valid(self):
         from django.utils import timezone
         from datetime import timedelta
-        return timezone.now() < self.created_at + timedelta(seconds=60)
+        return timezone.now() < self.created_at + timedelta(seconds=300)
