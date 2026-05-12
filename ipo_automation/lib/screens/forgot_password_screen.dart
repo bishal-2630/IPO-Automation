@@ -15,7 +15,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _confirmPasswordController = TextEditingController();
   final _apiService = ApiService();
 
-  int _currentStep = 0; // 0: Email, 1: OTP, 2: New Password
+  bool _codeSent = false;
+  bool _otpVerified = false;
   bool _isLoading = false;
 
   void _showError(String message) {
@@ -43,7 +44,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     try {
       await _apiService.requestPasswordReset(email);
       _showSuccess('Reset code sent to your email');
-      setState(() => _currentStep = 1);
+      setState(() => _codeSent = true);
     } catch (e) {
       _showError(e.toString());
     } finally {
@@ -62,13 +63,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     FocusScope.of(context).unfocus();
 
     try {
-      // Calling confirm endpoint without password only verifies the OTP
-      await _apiService.confirmPasswordReset(
-        _emailController.text.trim(),
-        otp,
-        '', 
-      );
-      setState(() => _currentStep = 2);
+      await _apiService.confirmPasswordReset(_emailController.text.trim(), otp, '');
+      _showSuccess('Code verified! Set your new password.');
+      setState(() => _otpVerified = true);
     } catch (e) {
       _showError(e.toString());
     } finally {
@@ -84,7 +81,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       _showError('Password must be at least 6 characters');
       return;
     }
-
     if (password != confirmPassword) {
       _showError('Passwords do not match');
       return;
@@ -100,7 +96,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         password,
       );
       _showSuccess('Password reset successfully!');
-      Navigator.pop(context); // Go back to Login
+      Navigator.pop(context);
     } catch (e) {
       _showError(e.toString());
     } finally {
@@ -111,97 +107,154 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Reset Password')),
-      body: Padding(
+      backgroundColor: const Color(0xFF121212), // Dark theme matching your app
+      appBar: AppBar(
+        title: const Text('Reset Password'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const SizedBox(height: 20),
-            Text(
-              _currentStep == 0 
-                  ? 'Enter your email to receive a reset code'
-                  : _currentStep == 1
-                      ? 'Enter the 6-digit code sent to ${_emailController.text}'
-                      : 'Create a new secure password',
-              style: const TextStyle(fontSize: 16, color: Colors.grey),
+            const Text(
+              'Follow the steps to reset your password',
+              style: TextStyle(color: Colors.grey, fontSize: 16),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 32),
-            
-            if (_currentStep == 0) ...[
-              TextField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'Email Address',
-                  prefixIcon: Icon(Icons.email_outlined),
-                  border: OutlineInputBorder(),
+            const SizedBox(height: 40),
+
+            // Step 1: Email
+            TextField(
+              controller: _emailController,
+              enabled: !_codeSent,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                labelText: 'Email Address',
+                labelStyle: const TextStyle(color: Colors.grey),
+                prefixIcon: const Icon(Icons.email_outlined, color: Colors.grey),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: const BorderSide(color: Colors.grey),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: const BorderSide(color: Color(0xFFBB86FC)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                disabledBorder: OutlineInputBorder(
+                  borderSide: const BorderSide(color: Colors.white24),
+                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
+            ),
+            
+            if (!_codeSent) ...[
               const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: _isLoading ? null : _requestCode,
-                style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1E1E1E),
+                  foregroundColor: const Color(0xFFD1C4E9),
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                ),
                 child: _isLoading 
-                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
-                    : const Text('Send Reset Code'),
+                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2)) 
+                    : const Text('Send Reset Code', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
             ],
 
-            if (_currentStep == 1) ...[
+            // Step 2: OTP (Shown after email is sent)
+            if (_codeSent) ...[
+              const SizedBox(height: 24),
               TextField(
                 controller: _otpController,
+                enabled: !_otpVerified,
                 keyboardType: TextInputType.number,
                 maxLength: 6,
+                style: const TextStyle(color: Colors.white, fontSize: 20, letterSpacing: 4),
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 24, letterSpacing: 8),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: '6-Digit Code',
-                  border: OutlineInputBorder(),
+                  labelStyle: const TextStyle(color: Colors.grey),
+                  counterText: "",
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: const BorderSide(color: Colors.grey),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: const BorderSide(color: Color(0xFFBB86FC)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
               ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: _isLoading ? null : _verifyOtp,
-                style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
-                child: _isLoading 
-                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
-                    : const Text('Verify Code'),
-              ),
-              TextButton(
-                onPressed: () => setState(() => _currentStep = 0),
-                child: const Text('Change Email'),
-              ),
+              if (!_otpVerified) ...[
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: _isLoading ? null : _verifyOtp,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1E1E1E),
+                    foregroundColor: const Color(0xFFD1C4E9),
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                  ),
+                  child: const Text('Verify Code', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
             ],
 
-            if (_currentStep == 2) ...[
+            // Step 3: Passwords (Shown only after OTP is verified)
+            if (_otpVerified) ...[
+              const SizedBox(height: 24),
               TextField(
                 controller: _passwordController,
                 obscureText: true,
-                decoration: const InputDecoration(
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
                   labelText: 'New Password',
-                  prefixIcon: Icon(Icons.lock_outline),
-                  border: OutlineInputBorder(),
+                  labelStyle: const TextStyle(color: Colors.grey),
+                  prefixIcon: const Icon(Icons.lock_outline, color: Colors.grey),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: const BorderSide(color: Colors.grey),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: const BorderSide(color: Color(0xFFBB86FC)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
               TextField(
                 controller: _confirmPasswordController,
                 obscureText: true,
-                decoration: const InputDecoration(
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
                   labelText: 'Confirm New Password',
-                  prefixIcon: Icon(Icons.lock_reset),
-                  border: OutlineInputBorder(),
+                  labelStyle: const TextStyle(color: Colors.grey),
+                  prefixIcon: const Icon(Icons.lock_reset, color: Colors.grey),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: const BorderSide(color: Colors.grey),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: const BorderSide(color: Color(0xFFBB86FC)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 32),
               ElevatedButton(
                 onPressed: _isLoading ? null : _resetPassword,
-                style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
-                child: _isLoading 
-                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
-                    : const Text('Update Password'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1E1E1E),
+                  foregroundColor: const Color(0xFFD1C4E9),
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                ),
+                child: const Text('Update Password', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
             ],
           ],
