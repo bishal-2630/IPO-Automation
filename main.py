@@ -850,13 +850,10 @@ def get_accounts():
             conn = psycopg2.connect(db_url)
             cur = conn.cursor()
             # Fetch accounts and join with auth_user to get the email
-            # Also join with automation_bankaccount for balance checking
             cur.execute("""
-                SELECT a.id, a.meroshare_user, a.meroshare_pass, a.boid, a.dp_name, a.crn, a.tpin, a.bank_name, a.kitta, u.email, a.owner_id,
-                       b.bank as bank_code, b.phone_number, b.bank_password
+                SELECT a.id, a.meroshare_user, a.meroshare_pass, a.boid, a.dp_name, a.crn, a.tpin, a.bank_name, a.kitta, u.email, a.owner_id
                 FROM automation_account a
                 LEFT JOIN auth_user u ON a.owner_id = u.id
-                LEFT JOIN automation_bankaccount b ON b.linked_account_id = a.id
                 WHERE a.is_active = True;
             """)
             
