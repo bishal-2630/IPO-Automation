@@ -164,30 +164,27 @@ class ConfirmPasswordResetView(APIView):
 
     def post(self, request):
         email = request.data.get('email')
-        otp = request.data.get('otp')
+        otp_received = request.data.get('otp')
         new_password = request.data.get('new_password')
-        
-        if not all([email, otp, new_password]):
-            return Response({"error": "All fields are required"}, status=status.HTTP_400_BAD_REQUEST)
-            
+
+        if not email or not otp_received:
+            return Response({"error": "Email and OTP are required"}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
-            user = User.objects.get(email=email)
-            otp_obj = PasswordResetOTP.objects.filter(user=user, otp=otp).first()
+            user = User.objects.get(email__iexact=email)
+            reset_otp = PasswordResetOTP.objects.get(user=user, otp=otp_received)
             
-            if not otp_obj:
-                return Response({"error": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
-                
-            # Check expiration (10 minutes)
-            if timezone.now() > otp_obj.created_at + timedelta(minutes=10):
-                otp_obj.delete()
+            if not reset_otp.is_valid():
                 return Response({"error": "OTP has expired"}, status=status.HTTP_400_BAD_REQUEST)
-                
-            # Success: Change Password
+
+            # If no password is provided, we are just verifying the OTP (Step 2)
+            if not new_password:
+                return Response({"status": "OTP verified successfully"}, status=status.HTTP_200_OK)
+
+            # Update password (Step 3)
             user.set_password(new_password)
             user.save()
-            
-            # Clean up
-            otp_obj.delete()
+            reset_otp.delete()
             return Response({"status": "Password reset successfully"}, status=status.HTTP_200_OK)
             
         except User.DoesNotExist:
