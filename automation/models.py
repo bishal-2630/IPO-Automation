@@ -71,3 +71,21 @@ class PasswordResetOTP(models.Model):
         from django.utils import timezone
         from datetime import timedelta
         return timezone.now() < self.created_at + timedelta(seconds=300)
+
+
+class BankAccount(models.Model):
+    linked_account = models.OneToOneField(Account, on_delete=models.CASCADE, related_name='bank_account')
+    bank = models.CharField(max_length=100, help_text="Bank code/name")
+    phone_number = models.CharField(max_length=20)
+    bank_password = models.CharField(max_length=500) # stored encrypted
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0.0)
+    last_updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Bank for {self.linked_account.meroshare_user}"
+
+    def set_bank_password(self, plain_password: str):
+        self.bank_password = encrypt_password(plain_password)
+
+    def get_bank_password(self) -> str:
+        return decrypt_password(self.bank_password)
