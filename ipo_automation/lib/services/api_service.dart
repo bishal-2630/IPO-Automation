@@ -162,4 +162,28 @@ class ApiService {
       headers: {'Authorization': 'Token $token'},
     );
   }
+
+  Future<Map<String, dynamic>> getUserProfile() async {
+    final token = await getToken();
+    final response = await http.get(
+      Uri.parse('$baseUrl/auth/profile/'),
+      headers: {'Authorization': 'Token $token'},
+    );
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed to fetch profile');
+    }
+  }
+
+  Future<void> deleteUserAccount() async {
+    final token = await getToken();
+    final response = await http.delete(
+      Uri.parse('$baseUrl/auth/delete-account/'),
+      headers: {'Authorization': 'Token $token'},
+    );
+    if (response.statusCode != 204) {
+      throw Exception('Failed to delete user account');
+    }
+  }
 }

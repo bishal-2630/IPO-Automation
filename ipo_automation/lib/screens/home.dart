@@ -4,6 +4,7 @@ import 'package:ipo_automation/models/account.dart';
 import 'add_account.dart';
 import 'login_screen.dart';
 import 'dashboard.dart';
+import 'profile_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -51,7 +52,12 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.account_circle, size: 30),
             tooltip: 'User Profile',
             onSelected: (value) async {
-              if (value == 'logout') {
+              if (value == 'profile') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => ProfileScreen()),
+                );
+              } else if (value == 'logout') {
                 await api.logout();
                 Navigator.pushReplacement(
                   context,
