@@ -51,7 +51,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
     try {
       await _apiService.requestPasswordReset(email);
-      _showSuccess('Reset code sent to your email');
+      _showSuccess('OTP code sent to your email');
       setState(() => _currentStep = 1);
     } catch (e) {
       _showError(e.toString());
@@ -151,7 +151,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   const SizedBox(height: 16),
                   Text(
                     _currentStep == 0 
-                        ? "Reset Password" 
+                        ? "OTP Code" 
                         : _currentStep == 1 
                             ? "Verify Code" 
                             : "New Password",
@@ -165,9 +165,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   const SizedBox(height: 8),
                   Text(
                     _currentStep == 0 
-                        ? "Enter your email to receive a reset code" 
+                        ? "Enter your email to receive an OTP code" 
                         : _currentStep == 1 
-                            ? "Enter the 6-digit code sent to your email" 
+                            ? "Enter the 6-digit OTP code sent to your email" 
                             : "Enter and confirm your new password",
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 14, color: Colors.grey.shade400),
@@ -198,7 +198,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                             keyboardType: TextInputType.emailAddress,
                           ),
                           const SizedBox(height: 32),
-                          _buildSubmitButton("Send Reset Code", _requestCode),
+                          _buildSubmitButton("Send OTP Code", _requestCode),
                         ],
 
                         if (_currentStep == 1) ...[
