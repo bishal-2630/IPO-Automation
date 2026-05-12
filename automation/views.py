@@ -137,7 +137,6 @@ class RequestPasswordResetView(APIView):
         
         try:
             user = User.objects.get(email=email)
-            print(f"DEBUG: Found user {user.username} for email {email}")
             otp = str(random.randint(100000, 999999))
             
             # Save OTP
@@ -160,7 +159,6 @@ class RequestPasswordResetView(APIView):
             
             return Response({"status": "OTP sent to your email"}, status=status.HTTP_200_OK)
         except User.DoesNotExist:
-            print(f"DEBUG: No user found with email {email}")
             # We return 200 even if user doesn't exist for security (avoiding email enumeration)
             return Response({"status": "OTP sent to your email if it exists"}, status=status.HTTP_200_OK)
         except Exception as e:
