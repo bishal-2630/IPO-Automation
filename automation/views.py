@@ -10,14 +10,20 @@ from django.contrib.auth import authenticate
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import TokenAuthentication
 from .tasks import run_all_accounts_task
+from rest_framework import serializers, viewsets, status
 from rest_framework.serializers import ModelSerializer
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from .models import Account, ApplicationLog, FCMToken, Profile
 import os
 
 
 class UserSerializer(ModelSerializer):
+    profile_image_url = serializers.CharField(source='profile.profile_image_url', read_only=True, allow_null=True)
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'profile_image_url']
 
 
 class FCMTokenViewSet(viewsets.ModelViewSet):
@@ -177,3 +183,16 @@ def home_view(request):
             <p>Access the API at <a href='/api/' style='color: #00ffff;'>/api/</a>.</p>
         </div>
     """)
+
+
+@receiver(post_save, sender=User)
+def create_user_profile(sender, instance, created, **kwargs):
+    if created:
+        Profile.objects.create(user=instance)
+
+
+@receiver(post_save, sender=User)
+def save_user_profile(sender, instance, **kwargs):
+    if not hasattr(instance, 'profile'):
+        Profile.objects.create(user=instance)
+    instance.profile.save()
