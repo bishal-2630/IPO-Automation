@@ -20,8 +20,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright python-dotenv psycopg2-binary firebase-admin cryptography easyocr
-          playwright install chromium
+          pip install -r requirements.txt
+          npx playwright install --with-deps chromium
 
       - name: Run IPO Result Check
         env:
