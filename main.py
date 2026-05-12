@@ -18,7 +18,7 @@ from expiry_handler import (
     check_account_expiry_warning,
     handle_expired_account,
 )
-# OCR imports moved to local scope in run_status_check to avoid global dependency issues
+import easyocr
 
 # Silence playwright logs
 logging.getLogger('playwright').setLevel(logging.ERROR)
@@ -1281,6 +1281,10 @@ def run_status_check():
 
     print(f"🔍 Official CDSC Status Check: Processing {len(accounts)} account(s)...")
 
+    # Initialize OCR Reader (Done once per run)
+    print("  [AI] Initializing EasyOCR...")
+    reader = easyocr.Reader(['en'], gpu=False)
+
     with sync_playwright() as p:
         headless = os.getenv("HEADLESS", "true").lower() == "true"
         browser = p.chromium.launch(
@@ -1294,7 +1298,6 @@ def run_status_check():
         page = context.new_page()
         
         # Initialize OCR Reader (Done once per run)
-        import easyocr
         print("  [AI] Initializing EasyOCR...")
         reader = easyocr.Reader(['en'], gpu=False)
 
