@@ -17,12 +17,20 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --no-cache-dir easyocr opencv-python-headless playwright python-dotenv psycopg2-binary firebase-admin cryptography
-          python -m pip list
-          npx playwright install --with-deps chromium
+      - name: Install Pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install EasyOCR (Verbose)
+        run: python -m pip install -v --no-cache-dir easyocr
+
+      - name: Install Other Dependencies
+        run: python -m pip install opencv-python-headless playwright python-dotenv psycopg2-binary firebase-admin cryptography
+
+      - name: Verify Installation
+        run: python -m pip list
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
 
       - name: Run IPO Result Check
         env:
