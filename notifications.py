@@ -25,7 +25,7 @@ def send_email_notification(to_email, subject, message):
     sender_email = os.getenv("SENDER_EMAIL")
     sender_password = os.getenv("SENDER_PASSWORD")
     smtp_server = os.getenv("SMTP_SERVER") or "smtp.gmail.com"
-    smtp_port = int(os.getenv("SMTP_PORT") or 587)
+    smtp_port = int(os.getenv("SMTP_PORT") or 465)
 
     if not (sender_email and sender_password):
         print("Warning: Skipping email notification (Sender credentials missing in .env)")
@@ -38,8 +38,7 @@ def send_email_notification(to_email, subject, message):
         msg["Subject"] = subject
         msg.attach(MIMEText(message, "plain"))
 
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10)
         server.login(sender_email, sender_password)
         server.send_message(msg)
         server.quit()
