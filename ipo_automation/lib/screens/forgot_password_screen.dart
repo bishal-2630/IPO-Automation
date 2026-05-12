@@ -17,6 +17,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   Future<void> _requestReset() async {
     if (_emailController.text.isEmpty) return;
+    
+    // Dismiss keyboard to prevent animation jank
+    FocusScope.of(context).unfocus();
+    
     setState(() => _isLoading = true);
     try {
       await api.requestPasswordReset(_emailController.text.trim());
@@ -35,6 +39,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   Future<void> _confirmReset() async {
     if (_otpController.text.isEmpty || _passwordController.text.isEmpty) return;
+    
+    // Dismiss keyboard
+    FocusScope.of(context).unfocus();
+    
     setState(() => _isLoading = true);
     try {
       await api.confirmPasswordReset(
