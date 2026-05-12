@@ -5,14 +5,11 @@ import time
 import re
 from playwright.sync_api import sync_playwright
 from main import login, apply_ipo, handle_password_reset
-from bank_checkers.bank import check_balance
 from expiry_handler import handle_expired_account
 
 # ── Firebase setup ──────────────────────────────────────────────────
 import firebase_admin
 from firebase_admin import credentials, messaging
-
-MIN_BALANCE = 2000.0  # Minimum required balance to apply for IPO (Rs.)
 
 def _init_firebase():
     if not firebase_admin._apps:
@@ -20,7 +17,6 @@ def _init_firebase():
         if os.path.exists(cred_path):
             cred = credentials.Certificate(cred_path)
         else:
-            # Fallback: load from base64-encoded env variable (used on GitHub Actions)
             import base64, json
             b64 = os.environ.get("FIREBASE_CREDENTIALS_B64", "")
             if not b64:
@@ -45,7 +41,6 @@ def send_push_notification(fcm_tokens: list, title: str, body: str):
             default_sound=True,
         )
     )
-    
     message = messaging.MulticastMessage(
         notification=messaging.Notification(title=title, body=body),
         tokens=fcm_tokens,
@@ -85,15 +80,13 @@ def run_automation():
         return
 
     try:
-        # 1. Fetch active accounts with a short-lived connection
+        # 1. Fetch active accounts
         conn = psycopg2.connect(DB_URL)
         cur = conn.cursor()
         cur.execute("""
             SELECT a.id, a.meroshare_user, a.meroshare_pass, a.dp_name,
-                   a.crn, a.tpin, a.bank_name, a.kitta, a.owner_id,
-                   b.bank, b.phone_number, b.bank_password
+                   a.crn, a.tpin, a.bank_name, a.kitta, a.owner_id
             FROM automation_account a
-            LEFT JOIN automation_bankaccount b ON b.linked_account_id = a.id
             WHERE a.is_active = True;
         """)
         columns = [desc[0] for desc in cur.description]
@@ -127,54 +120,7 @@ def run_automation():
                 ipo_name = "Auto-Check"
                 page = context.new_page()
                 try:
-                    # 2. Bank balance check
-                    balance = None
-                    if acc.get('bank') and acc.get('phone_number') and acc.get('bank_password'):
-                        bank_page = context.new_page()
-                        try:
-                            balance = check_balance(
-                                bank_code=acc['bank'],
-                                phone_number=acc['phone_number'],
-                                password=decrypt(acc['bank_password']),
-                                page=bank_page,
-                                account_id=acc['id'],
-                            )
-                        except Exception as e:
-                            print(f"  ❌ Bank Check Exception: {e}")
-                        finally:
-                            bank_page.close()
-
-                        if balance is not None:
-                            print(f"  💰 Found Balance: Rs.{balance:,.2f}")
-                            if balance < MIN_BALANCE:
-                                status = "Low Balance"
-                                remark = f"Low Balance: Rs.{balance:.2f}. Please make sure your minimum balance is 2000 to apply ipo successfully."
-                                print(f"  ⚠️  Low balance — skipping IPO.")
-                                
-                                # Quick notify for low balance
-                                try:
-                                    conn = psycopg2.connect(DB_URL)
-                                    cur = conn.cursor()
-                                    if acc.get('owner_id'):
-                                        cur.execute("SELECT token FROM automation_fcmtoken WHERE user_id = %s", (acc['owner_id'],))
-                                        tokens = [row[0] for row in cur.fetchall()]
-                                        send_push_notification(tokens, acc['meroshare_user'], f"Balance Check - ⚠️ {remark}")
-                                    cur.close()
-                                    conn.close()
-                                    notification_sent = True
-                                except: pass
-                                
-                                page.close()
-                                continue
-                            else:
-                                status = "Success"
-                                remark = f"Balance: Rs.{balance:.2f}"
-                        else:
-                            print(f"  ❌ Failed to retrieve balance.")
-                            status = "Failed"
-                            remark = "Failed to retrieve balance"
-
-                    # 3. MeroShare IPO Application
+                    # 2. MeroShare IPO Application
                     account_data = {
                         'MEROSHARE_USER': acc['meroshare_user'],
                         'MEROSHARE_PASS': decrypt(acc['meroshare_pass']),
@@ -201,11 +147,11 @@ def run_automation():
                     elif login_result == "EXPIRED":
                         print(f"  [{acc['meroshare_user']}] Password expired. Handling reset...")
                         if handle_password_reset(page, account_data):
-                             status = "Success"
-                             remark = "Password reset successfully. Re-run required."
+                            status = "Success"
+                            remark = "Password reset successfully. Re-run required."
                         else:
-                             status = "Failed"
-                             remark = "Password expired and reset failed."
+                            status = "Failed"
+                            remark = "Password expired and reset failed."
                     else:
                         print(f"  ❌ MeroShare Login failed for {acc['meroshare_user']}.")
                         status = "Failed"
@@ -215,7 +161,7 @@ def run_automation():
                     print(f"  ❌ Inner Exception: {e}")
                     remark = str(e)
                 finally:
-                    # 4. Final Logging and Notification (Fresh connection)
+                    # 3. Final Logging and Notification
                     try:
                         conn = psycopg2.connect(DB_URL)
                         cur = conn.cursor()
@@ -228,9 +174,8 @@ def run_automation():
                             conn.commit()
                         else:
                             print(f"  ℹ️  Skipping database log for: {remark}")
-                        
+
                         if acc.get('owner_id') and status != "Error" and "No ordinary shares" not in remark and not notification_sent:
-                            # 1. New IPO Discovery Notification
                             if ipo_name and ipo_name != "Auto-Check":
                                 cur.execute("""
                                     SELECT COUNT(*) FROM automation_applicationlog l
@@ -238,7 +183,7 @@ def run_automation():
                                     WHERE a.owner_id = %s AND l.company_name = %s AND l.status = 'Success'
                                 """, (acc['owner_id'], ipo_name))
                                 has_applied = cur.fetchone()[0] > 0
-                                
+
                                 if not has_applied:
                                     cur.execute("SELECT token FROM automation_fcmtoken WHERE user_id = %s", (acc['owner_id'],))
                                     all_tokens = [row[0] for row in cur.fetchall()]
@@ -248,12 +193,12 @@ def run_automation():
                             tokens = [row[0] for row in cur.fetchall()]
                             send_push_notification(tokens, acc['meroshare_user'], f"{ipo_name or 'IPO'} - {'✅' if status=='Success' else '⚠️'} {status}: {remark}")
                             notification_sent = True
-                        
+
                         cur.close()
                         conn.close()
                     except Exception as fatal:
                         print(f"  ⚠️  Fatal Logging Error: {fatal}")
-                    
+
                     try: page.close()
                     except: pass
 

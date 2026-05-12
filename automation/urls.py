@@ -1,17 +1,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    AccountViewSet, ApplicationLogViewSet, RegisterView, LoginView, 
-    FCMTokenViewSet, ManualTriggerView, SecureTriggerView, BankAccountViewSet, HealthView,
-    BankOTPViewSet
+    AccountViewSet, ApplicationLogViewSet, RegisterView, LoginView,
+    FCMTokenViewSet, ManualTriggerView, SecureTriggerView, HealthView,
 )
 
 router = DefaultRouter()
 router.register(r'accounts', AccountViewSet, basename='account')
 router.register(r'logs', ApplicationLogViewSet, basename='applicationlog')
 router.register(r'fcm-tokens', FCMTokenViewSet, basename='fcm-token')
-router.register(r'bank-accounts', BankAccountViewSet, basename='bankaccount')
-router.register(r'bank-otps', BankOTPViewSet, basename='bankotp')
 
 urlpatterns = [
     path('', include(router.urls)),

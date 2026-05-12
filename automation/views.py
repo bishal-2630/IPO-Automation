@@ -1,8 +1,5 @@
-from .models import Account, ApplicationLog, FCMToken, BankAccount, BankOTP
-from .serializers import (
-    AccountSerializer, ApplicationLogSerializer, FCMTokenSerializer, 
-    BankAccountSerializer, BankOTPSerializer
-)
+from .models import Account, ApplicationLog, FCMToken
+from .serializers import AccountSerializer, ApplicationLogSerializer, FCMTokenSerializer
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
@@ -13,6 +10,7 @@ from django.contrib.auth import authenticate
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import TokenAuthentication
 from .tasks import run_all_accounts_task
+import os
 
 
 class FCMTokenViewSet(viewsets.ModelViewSet):
@@ -26,7 +24,7 @@ class FCMTokenViewSet(viewsets.ModelViewSet):
         device_id = request.data.get('device_id')
         if not token:
             return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         fcm_token_obj, created = FCMToken.objects.update_or_create(
             token=token,
             defaults={
@@ -50,25 +48,12 @@ class AccountViewSet(viewsets.ModelViewSet):
         serializer.save(owner=self.request.user)
 
 
-class BankAccountViewSet(viewsets.ModelViewSet):
-    serializer_class = BankAccountSerializer
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return BankAccount.objects.filter(owner=self.request.user)
-
-    def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
-
-
 class ApplicationLogViewSet(viewsets.ModelViewSet):
     serializer_class = ApplicationLogSerializer
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Only return logs for accounts owned by the logged-in user
         return ApplicationLog.objects.filter(account__owner=self.request.user).order_by('-timestamp')
 
     @action(detail=False, methods=['post'], url_path='mark-as-read')
@@ -76,57 +61,6 @@ class ApplicationLogViewSet(viewsets.ModelViewSet):
         unreads = self.get_queryset().filter(is_read=False)
         unreads.update(is_read=True)
         return Response({'status': 'marked as read'})
-
-
-class BankOTPViewSet(viewsets.ModelViewSet):
-    serializer_class = BankOTPSerializer
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        queryset = BankOTP.objects.filter(user=self.request.user)
-        
-        # Manual filtering for account and is_used
-        account_id = self.request.query_params.get('account')
-        is_used = self.request.query_params.get('is_used')
-        
-        if account_id:
-            queryset = queryset.filter(account_id=account_id)
-        if is_used is not None:
-            is_used_bool = is_used.lower() == 'true'
-            queryset = queryset.filter(is_used=is_used_bool)
-            
-        return queryset.order_by('-created_at')
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-
-    def create(self, request, *args, **kwargs):
-        # We allow lookup by account ID, meroshare_user, or no account at all (User Pool)
-        account_id = request.data.get('account')
-        meroshare_user = request.data.get('meroshare_user')
-        otp_code = request.data.get('otp_code')
-
-        if not otp_code:
-            return Response({'error': 'otp_code is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        account = None
-        try:
-            if account_id:
-                account = Account.objects.get(id=account_id, owner=request.user)
-            elif meroshare_user:
-                account = Account.objects.get(meroshare_user=meroshare_user, owner=request.user)
-        except Account.DoesNotExist:
-            pass # We'll allow it to be linked to just the user
-
-        # Create new OTP entry
-        otp_obj = BankOTP.objects.create(
-            user=request.user,
-            account=account,
-            otp_code=otp_code
-        )
-        serializer = self.get_serializer(otp_obj)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class RegisterView(APIView):
@@ -167,7 +101,7 @@ class ManualTriggerView(APIView):
 
 class SecureTriggerView(APIView):
     """
-    Experimental endpoint to trigger automation from external services like Cron-job.org.
+    Endpoint to trigger automation from external services like Cron-job.org.
     Requires a secret token in the X-Trigger-Token header.
     """
     authentication_classes = []
@@ -176,15 +110,16 @@ class SecureTriggerView(APIView):
     def post(self, request):
         token = request.headers.get('X-Trigger-Token')
         expected_token = os.environ.get('TRIGGER_TOKEN')
-        
+
         if not expected_token or token != expected_token:
             return Response({"error": "Unauthorized"}, status=status.HTTP_401_UNAUTHORIZED)
-            
+
         run_all_accounts_task.delay()
         return Response({"status": "Automation triggered successfully"}, status=status.HTTP_200_OK)
+
+
 class HealthView(APIView):
     def get(self, request):
-        import os
         from cryptography.fernet import Fernet
         key = os.environ.get("ENCRYPTION_KEY", "").strip()
         key_valid = False
@@ -195,7 +130,7 @@ class HealthView(APIView):
                 key_valid = True
         except Exception as e:
             error_msg = str(e)
-            
+
         return Response({
             "status": "online",
             "version": "v3.17-final",
@@ -205,12 +140,13 @@ class HealthView(APIView):
             "branch": "user-part-1"
         })
 
+
 def home_view(request):
     from django.http import HttpResponse
     return HttpResponse("""
         <div style='background: #1a1a1a; color: #00ff00; padding: 20px; font-family: monospace;'>
             <h1>🚀 IPO AUTOMATION BACKEND</h1>
-            <p style='color: #ff00ff; font-size: 20px;'>VERSION: v3.13 (Mar 03 - 03:15)</p>
+            <p style='color: #ff00ff; font-size: 20px;'>VERSION: v3.18</p>
             <p>Branch: user-part-1</p>
             <p>Access the API at <a href='/api/' style='color: #00ffff;'>/api/</a>.</p>
         </div>

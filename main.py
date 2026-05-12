@@ -13,7 +13,6 @@ import logging
 from notifications import send_email_notification, send_push_notification
 import firebase_admin
 from firebase_admin import credentials, messaging
-from bank_checkers.bank import check_balance
 from expiry_handler import (
     detect_account_expiry,
     check_account_expiry_warning,
@@ -1175,55 +1174,6 @@ def run_automation():
                 geolocation={'latitude': 27.7172, 'longitude': 85.3240}, # Kathmandu
                 viewport={'width': 1280, 'height': 720}
             )
-            # 0. Bank Balance Check
-            # Runs for every account regardless of IPO availability
-            if account.get('BANK_CODE') and account.get('BANK_PHONE') and account.get('BANK_PASS'):
-                print(f"[{username}] Checking bank balance for {account['BANK_CODE']}...")
-                bank_page = context.new_page()
-                try:
-                    balance = check_balance(
-                        bank_code=account['BANK_CODE'],
-                        phone_number=account['BANK_PHONE'],
-                        password=account['BANK_PASS'],
-                        page=bank_page,
-                        account_id=account.get('ID')
-                    )
-                    
-                    status = "Success"
-                    remark = f"Balance: Rs.{balance:.2f}" if balance is not None else "Failed to retrieve balance"
-                    
-                    if balance is not None and balance < MIN_BALANCE:
-                        status = "Low Balance"
-                        remark = f"Low Balance: Rs.{balance:.2f}. Please make sure your minimum balance is 2000 to apply ipo successfully."
-                        print(f"[{username}] ⚠️ Low Balance: Rs.{balance:.2f}")
-                        msg = f"⚠️ {remark}"
-                        send_push_notification(account.get('TOKENS'), username, msg)
-                    elif balance is not None:
-                        print(f"[{username}] Balance OK: Rs.{balance:.2f}")
-
-                    # Log to database if enabled
-                    db_url = os.getenv("DATABASE_URL")
-                    if db_url:
-                        try:
-                            import psycopg2
-                            conn = psycopg2.connect(db_url)
-                            cur = conn.cursor()
-                            cur.execute("""
-                                INSERT INTO automation_applicationlog
-                                    (account_id, company_name, status, remark, timestamp, is_read)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                            """, (account.get('ID'), "Balance Check", status, remark,
-                                  datetime.datetime.now(datetime.timezone.utc), False))
-                            conn.commit()
-                            cur.close()
-                            conn.close()
-                        except Exception as db_err:
-                            print(f"Warning: Failed to log balance check: {db_err}")
-
-                except Exception as e:
-                    print(f"[{username}] Error checking bank balance: {e}")
-                finally:
-                    bank_page.close()
 
             page = context.new_page()
             try:

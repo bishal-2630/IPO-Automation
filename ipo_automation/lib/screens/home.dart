@@ -2,11 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:ipo_automation/services/api_service.dart';
 import 'package:ipo_automation/models/account.dart';
 import 'add_account.dart';
-import 'add_bank_screen.dart';
-import 'bank_list_screen.dart';
 import 'login_screen.dart';
 import 'dashboard.dart';
-import 'package:ipo_automation/models/bank_account.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -46,7 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("IPO Automation", style: TextStyle(fontWeight: FontWeight.bold)), 
+        title: Text("IPO Automation", style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.deepPurple,
         elevation: 0,
         actions: [
@@ -91,7 +88,6 @@ class _HomeScreenState extends State<HomeScreen> {
         index: _selectedIndex,
         children: [
           _buildAccountsTab(),
-          BankListScreen(),
           DashboardScreen(),
         ],
       ),
@@ -112,7 +108,6 @@ class _HomeScreenState extends State<HomeScreen> {
           }
 
           final allAccounts = snapshot.data ?? [];
-
 
           if (allAccounts.isEmpty) {
             return _buildEmptyState("No accounts", "Tap + to add MeroShare account");
@@ -177,7 +172,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-
 
   Widget _buildAccountCard(Account acc) {
     return Dismissible(
@@ -250,7 +244,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           );
         } catch (e) {
-          setState(() {}); // restore item on failure
+          setState(() {});
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Failed to delete account: $e'),
@@ -344,12 +338,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          onTap: () {
-            // Normal tap could show details
-          },
-          onLongPress: () {
-            // No longer needed for OTP relay
-          },
           trailing: IconButton(
             icon: Icon(Icons.edit, color: Colors.deepPurple),
             onPressed: () async {
@@ -375,7 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
       onTap: (index) {
         setState(() {
           _selectedIndex = index;
-          if (index == 2) {
+          if (index == 1) {
             _unreadCount = 0;
             api.markLogsAsRead();
           }
@@ -383,7 +371,6 @@ class _HomeScreenState extends State<HomeScreen> {
       },
       items: [
         BottomNavigationBarItem(icon: Icon(Icons.wallet), label: 'Accounts'),
-        BottomNavigationBarItem(icon: Icon(Icons.account_balance), label: 'Banks'),
         BottomNavigationBarItem(
           icon: Stack(
             children: [

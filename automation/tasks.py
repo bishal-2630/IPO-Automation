@@ -1,7 +1,6 @@
 from celery import shared_task
 import os
 import sys
-import json
 import datetime
 from django.utils import timezone
 from .models import Account, ApplicationLog
@@ -15,14 +14,12 @@ if BASE_DIR not in sys.path:
 @shared_task
 def apply_ipo_task(account_id):
     """
-    Celery task to apply for IPO. 
-    In a hybrid environment, this should ideally only run on the GitHub Action runner,
-    but we keep it here for compatibility and manual triggers if environment allows.
+    Celery task to apply for IPO.
     """
     account_obj = None
     try:
         account_obj = Account.objects.get(id=account_id)
-        
+
         # 1. Attempt deep imports (Playwright and Main logic)
         try:
             from playwright.sync_api import sync_playwright
@@ -61,60 +58,25 @@ def apply_ipo_task(account_id):
                 permissions=['geolocation'],
                 geolocation={'latitude': 27.7172, 'longitude': 85.3240},
                 viewport={'width': 1280, 'height': 720},
-                extra_http_headers={ "Accept-Language": "en-US,en;q=0.9" }
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
             )
             page = context.new_page()
-            
-            try:
-                # 3.1 Bank Balance Check
-                from bank_checkers.bank import check_balance
-                from .models import BankAccount
-                
-                bank_acc = BankAccount.objects.filter(linked_account=account_obj).first()
-                if bank_acc:
-                    print(f"[{account_obj.meroshare_user}] Checking bank balance...")
-                    bank_page = context.new_page()
-                    try:
-                        balance = check_balance(
-                            bank_code=bank_acc.bank,
-                            phone_number=bank_acc.phone_number,
-                            password=bank_acc.get_bank_password(),
-                            page=bank_page,
-                            account_id=account_obj.id
-                        )
-                        
-                        status = "Success"
-                        remark = f"Balance: Rs.{balance:.2f}" if balance is not None else "Failed to retrieve balance"
-                        
-                        if balance is not None and balance < 2000.0: # MIN_BALANCE
-                            status = "Low Balance"
-                        
-                        ApplicationLog.objects.create(
-                            account=account_obj,
-                            company_name="Balance Check",
-                            status=status,
-                            remark=remark
-                        )
-                        print(f"[{account_obj.meroshare_user}] Bank Balance: {remark}")
-                    except Exception as bank_err:
-                        print(f"Error checking bank balance for {account_obj.meroshare_user}: {bank_err}")
-                    finally:
-                        bank_page.close()
 
+            try:
                 page.goto("https://meroshare.cdsc.com.np", timeout=60000)
                 login_result = login(page, account_data['MEROSHARE_USER'], account_data['MEROSHARE_PASS'], account_data['DP_NAME'])
-                
+
                 if login_result is True:
                     success, result_detail = apply_ipo(page, account_data)
                     company_name = result_detail if success else "IPO Automation"
-                    
+
                     ApplicationLog.objects.create(
                         account=account_obj,
                         company_name=company_name,
                         status="Success" if success else "Failed",
                         remark=f"Result: {result_detail}"
                     )
-                    
+
                     if success:
                         send_fcm_notification(
                             account_obj.owner,

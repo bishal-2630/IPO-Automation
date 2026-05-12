@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/home.dart';
 import 'screens/login_screen.dart';
 import 'services/notification_service.dart';
-import 'services/otp_relay_service.dart';
 
 // Top-level background message handler
 @pragma('vm:entry-point')
@@ -17,16 +16,13 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  
+
   // Set the background messaging handler early on
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   final notificationService = NotificationService();
   await notificationService.initialize();
-  
-  final otpRelayService = OtpRelayService();
-  otpRelayService.initialize();
-  
+
   final prefs = await SharedPreferences.getInstance();
   final token = prefs.getString('token');
 
@@ -35,7 +31,7 @@ void main() async {
 
 class IPOApp extends StatelessWidget {
   final bool isLoggedIn;
-  
+
   IPOApp({required this.isLoggedIn});
 
   @override
@@ -44,9 +40,7 @@ class IPOApp extends StatelessWidget {
       title: 'IPO Automation',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.deepPurple, brightness: Brightness.dark),
-      // If logged in, go to Home; else go to LoginScreen
       home: isLoggedIn ? HomeScreen() : LoginScreen(),
     );
   }
 }
-

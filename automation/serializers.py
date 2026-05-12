@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Account, ApplicationLog, FCMToken, BankAccount, BankOTP
+from .models import Account, ApplicationLog, FCMToken
 from .encryption import encrypt_password
 
 
@@ -16,8 +16,8 @@ class AccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = Account
         fields = [
-            'id', 'meroshare_user', 'meroshare_pass', 'dp_name', 
-            'crn', 'tpin', 'bank_name', 'owner_name', 
+            'id', 'meroshare_user', 'meroshare_pass', 'dp_name',
+            'crn', 'tpin', 'bank_name', 'owner_name',
             'kitta', 'is_active', 'last_applied', 'boid'
         ]
         read_only_fields = ['owner', 'last_applied']
@@ -27,7 +27,6 @@ class AccountSerializer(serializers.ModelSerializer):
         instance = Account(**validated_data)
         if plain:
             instance.set_meroshare_pass(plain)
-        # Owner is usually set in perform_create, but we handle it here if passed
         instance.save()
         return instance
 
@@ -37,37 +36,6 @@ class AccountSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         if plain:
             instance.set_meroshare_pass(plain)
-        instance.save()
-        return instance
-
-
-class BankAccountSerializer(serializers.ModelSerializer):
-    # Accept plain password on write, never expose it on read
-    bank_password = serializers.CharField(write_only=True, required=True)
-    bank_display = serializers.CharField(source='get_bank_display', read_only=True)
-
-    class Meta:
-        model = BankAccount
-        fields = [
-            'id', 'bank', 'bank_display',
-            'phone_number', 'bank_password',
-            'linked_account', 'created_at',
-        ]
-        read_only_fields = ['owner', 'created_at']
-
-    def create(self, validated_data):
-        plain = validated_data.pop('bank_password')
-        instance = BankAccount(**validated_data)
-        instance.set_bank_password(plain)
-        instance.save()
-        return instance
-
-    def update(self, instance, validated_data):
-        plain = validated_data.pop('bank_password', None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        if plain:
-            instance.set_bank_password(plain)
         instance.save()
         return instance
 
@@ -79,8 +47,3 @@ class ApplicationLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = ApplicationLog
         fields = ['id', 'account', 'account_user', 'owner_name', 'company_name', 'status', 'remark', 'is_read', 'timestamp']
-class BankOTPSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = BankOTP
-        fields = ['id', 'user', 'account', 'otp_code', 'is_used', 'created_at']
-        read_only_fields = ['user', 'is_used', 'created_at']
