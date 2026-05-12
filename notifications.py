@@ -25,6 +25,7 @@ def send_email_notification(to_email, subject, message):
     # 1. Try Google Apps Script (Web API) first - Works on Hugging Face
     gmail_api_url = os.getenv("GMAIL_API_URL")
     if gmail_api_url:
+        print(f"DEBUG: Using Google Apps Script URL starting with: {gmail_api_url[:20]}...")
         try:
             import requests
             response = requests.post(
