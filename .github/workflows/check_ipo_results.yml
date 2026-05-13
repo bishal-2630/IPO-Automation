@@ -1,4 +1,4 @@
-# Force Refresh Commit - V3
+# Force Refresh Commit - V4
 name: Check IPO Results - FORCE REFRESH
 
 on:
@@ -16,10 +16,15 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install EasyOCR (Heavy Deps)
         run: |
           python -m pip install --upgrade pip
-          pip install playwright python-dotenv psycopg2-binary firebase-admin cryptography easyocr opencv-python-headless
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install easyocr opencv-python-headless
+
+      - name: Install Project Dependencies
+        run: |
+          pip install playwright python-dotenv psycopg2-binary firebase-admin cryptography
           pip install -r requirements.txt
           playwright install chromium
 
