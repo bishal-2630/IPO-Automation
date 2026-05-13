@@ -514,15 +514,17 @@ def login(page, username, password, dp_name):
                  page.keyboard.press("Enter")
                  page.wait_for_timeout(1000)
 
-        # 2. Type a shorter prefix of the DP name into the search box for better results
-        # e.g., "NIC ASIA BANK LTD." -> "NIC"
-        dp_prefix = dp_name.split()[0] if dp_name.split() else dp_name
+        # 2. Type a more specific prefix of the DP name for better results
+        # e.g., "NABIL INVESTMENT BANKING LTD." -> "NABIL INVESTMENT"
+        words = dp_name.split()
+        dp_prefix = " ".join(words[:2]) if len(words) > 1 else dp_name
+        
         search_box = page.locator(".select2-search__field, .select2-search input").first
         search_box.wait_for(state="visible", timeout=5000)
         search_box.fill(dp_prefix)
         page.wait_for_timeout(2000)
         
-        # 3. Find the best match in the results
+        # 3. Find the best match in the results (STRICTER MATCHING)
         success = page.evaluate(rf"""
             (targetName) => {{
                 const options = Array.from(document.querySelectorAll('.select2-results__option'));
@@ -531,20 +533,25 @@ def login(page, username, password, dp_name):
                 const noResults = options.find(o => o.innerText.includes('No results found'));
                 if (noResults) return "NO_RESULTS";
 
-                const clean = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\b(ltd|limited|corp|inc|plc|bank)\b/g, '').trim();
+                const clean = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\b(ltd|limited|corp|inc|plc)\b/g, '').trim();
                 const targetClean = clean(targetName);
                 const targetWords = targetClean.split(/\s+/).filter(w => w.length > 1);
 
-                // Strategy 1: Look for most relevant match (intersection of words)
                 let bestMatch = null;
                 let maxMatches = -1;
 
                 for (const o of options) {{
                     const text = clean(o.innerText);
+                    // Match words and check if it's a closer length match to avoid "NABIL BANK" winning over "NABIL INVESTMENT"
                     const matchCount = targetWords.filter(w => text.includes(w)).length;
                     if (matchCount > maxMatches && matchCount > 0) {{
                         maxMatches = matchCount;
                         bestMatch = o;
+                    }} else if (matchCount === maxMatches && maxMatches > 0) {{
+                        // Tie-breaker: choose the one with closer text length
+                        if (Math.abs(text.length - targetClean.length) < Math.abs(clean(bestMatch.innerText).length - targetClean.length)) {{
+                            bestMatch = o;
+                        }}
                     }}
                 }}
 
@@ -560,6 +567,20 @@ def login(page, username, password, dp_name):
         if success and success.startswith("SUCCESS:"):
             selected_name = success.split("SUCCESS:")[1]
             print(f"  [DP] Selected: {selected_name}")
+            
+            # VERIFICATION: Read what is actually displayed in the dropdown container
+            page.wait_for_timeout(1000)
+            actual_display = page.inner_text(".select2-selection__rendered, .select2-selection").strip()
+            if dp_name.lower().split()[0] not in actual_display.lower():
+                print(f"  ⚠️ VERIFICATION FAILED: Page shows '{actual_display}', but we wanted '{dp_name}'. Retrying search...")
+                # Try typing the FULL name this time
+                search_box = page.locator(".select2-search__field, .select2-search input").first
+                page.dispatch_event(".ng-select-container, .select2-selection", "click")
+                search_box.fill(dp_name)
+                page.wait_for_timeout(2000)
+                page.keyboard.press("Enter")
+                page.wait_for_timeout(1000)
+        
         elif success == "NO_RESULTS":
             print(f"  ❌ No results found for DP: {dp_name}. Clearing overlay...")
             page.keyboard.press("Escape")
