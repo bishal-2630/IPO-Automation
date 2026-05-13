@@ -1,4 +1,4 @@
-# Force Refresh Commit - V4
+# Force Refresh Commit - V5
 name: Check IPO Results - FORCE REFRESH
 
 on:
@@ -16,17 +16,30 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install EasyOCR (Heavy Deps)
+      - name: Super Installation
         run: |
+          set -e
+          echo "--- STEP 1: Upgrading Pip ---"
           python -m pip install --upgrade pip
+          
+          echo "--- STEP 2: Installing Torch (CPU) ---"
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          
+          echo "--- STEP 3: Installing EasyOCR & OpenCV ---"
           pip install easyocr opencv-python-headless
-
-      - name: Install Project Dependencies
-        run: |
+          
+          echo "--- STEP 4: Installing Other Dependencies ---"
           pip install playwright python-dotenv psycopg2-binary firebase-admin cryptography
+          
+          echo "--- STEP 5: Installing Requirements.txt ---"
           pip install -r requirements.txt
+          
+          echo "--- STEP 6: Playwright Browser Setup ---"
           playwright install chromium
+          
+          echo "--- STEP 7: Final Verification ---"
+          python -c "import easyocr; print('✅ SUCCESS: EasyOCR is importable')"
+          pip list | grep easyocr
 
       - name: Run IPO Result Check
         env:
