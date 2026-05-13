@@ -118,7 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _buildDrawerItem(
               icon: Icons.insights,
               label: "Upcoming Issues",
-              index: 2, # Index 2 for upcoming
+              index: 2, // Index 2 for upcoming
             ),
             _buildDrawerItem(
               icon: Icons.notifications_none,
@@ -139,7 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           _buildAccountsTab(),
           DashboardScreen(),
-          Center(child: Text("Upcoming IPO Calendar", style: TextStyle(color: Colors.white))), # Placeholder for now
+          Center(child: Text("Upcoming IPO Calendar", style: TextStyle(color: Colors.white))), // Placeholder for now
         ],
       ),
     );

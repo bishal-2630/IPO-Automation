@@ -1,12 +1,7 @@
-# FINAL FIX - V6
-name: IPO RESULT FINAL FIX
+name: IPO RESULT CHECK
 
 on:
   workflow_dispatch:
-  schedule:
-    # Runs at 04:15 UTC (10:00 AM Kathmandu) and 08:15 UTC (02:00 PM Kathmandu) every day
-    - cron: '15 4 * * *'
-    - cron: '15 8 * * *'
 
 jobs:
   check-results:
@@ -20,8 +15,8 @@ jobs:
       - name: Git Debug Info
         run: |
           git log -n 1 --oneline
-          ls -l main.py
-          grep -n "V4" main.py || echo "V4 NOT FOUND IN main.py"
+          ls -l ipo_result.py
+          grep -n "V4" ipo_result.py || echo "V4 NOT FOUND IN ipo_result.py"
 
       - name: Cache EasyOCR Models
         uses: actions/cache@v3
@@ -66,7 +61,7 @@ jobs:
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
           RUN_MODE: "check_status"
           HEADLESS: "true"
-        run: python main.py
+        run: python ipo_result.py
 
       - name: Upload Debug Screenshots
         if: always()
