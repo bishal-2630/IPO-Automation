@@ -1332,13 +1332,26 @@ def run_status_check():
 
             # ── STEP 1: Read the first company from the CDSC dropdown ──────────
             print("\n  Opening dropdown to read latest company with results...")
-            page.dispatch_event("ng-select", "click")
-            page.wait_for_timeout(1500)
+            # Target the inner container (the actual clickable part of ng-select)
+            page.dispatch_event(".ng-select-container", "click")
+            page.wait_for_timeout(2500)
 
             first_company = page.evaluate("""
                 () => {
-                    const opt = document.querySelector('.ng-option');
-                    return opt ? opt.innerText.trim() : null;
+                    // Try multiple selectors in order of specificity
+                    const selectors = [
+                        '.ng-dropdown-panel .ng-option:first-child',
+                        '.ng-option:first-child',
+                        '[role="option"]:first-child',
+                        '.ng-option-label'
+                    ];
+                    for (const sel of selectors) {
+                        const el = document.querySelector(sel);
+                        if (el && el.innerText && el.innerText.trim().length > 2) {
+                            return el.innerText.trim();
+                        }
+                    }
+                    return null;
                 }
             """)
 
@@ -1367,13 +1380,12 @@ def run_status_check():
             print(f"  ✅ Match found! '{first_company}' was applied for. Proceeding with result check...")
 
             # ── STEP 3: Select the company in the dropdown ─────────────────────
-            # Press Escape first to close the open dropdown, then reopen and select
             page.keyboard.press("Escape")
             page.wait_for_timeout(300)
-            page.dispatch_event("ng-select", "click")
-            page.wait_for_timeout(500)
+            page.dispatch_event(".ng-select-container", "click")
+            page.wait_for_timeout(800)
             page.type("ng-select input", first_company, delay=50)
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1200)
             page.keyboard.press("Enter")
             page.wait_for_timeout(1000)
 
