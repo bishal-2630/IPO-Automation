@@ -1753,8 +1753,11 @@ def run_status_check():
                 success_found = False
                 for attempt in range(5):
                     try:
-                        # 1. Fill BOID
-                        page.fill("input#boid, input[name='boid']", boid)
+                        # 1. Fill BOID (typing like a human)
+                        page.locator("input#boid, input[name='boid']").click()
+                        page.keyboard.press("Control+A")
+                        page.keyboard.press("Backspace")
+                        page.type("input#boid, input[name='boid']", boid, delay=100)
                         
                         # 2. Solve Captcha
                         captcha_code = solve_captcha(page, reader)
@@ -1762,7 +1765,8 @@ def run_status_check():
                             print(f"  [{username}] Could not solve captcha. Skipping account.")
                             break
                             
-                        page.fill("input#captcha, input[name='userCaptcha']", captcha_code)
+                        page.locator("input#captcha, input[name='userCaptcha']").click()
+                        page.type("input#captcha, input[name='userCaptcha']", captcha_code, delay=150)
                         
                         # 3. Submit
                         page.click("button[type='submit'], .btn-submit")
@@ -1860,13 +1864,13 @@ def get_applied_companies():
         return []
 
 if __name__ == "__main__":
-    # RUN_MODE=check_status → runs the result check via MeroShare API (no captcha)
-    # RUN_MODE=check_status_cdsc → uses the CDSC portal browser method (requires captcha)
+    # RUN_MODE=check_status → runs the official CDSC portal check (fastest)
+    # RUN_MODE=check_status_api → runs the MeroShare API check (no captcha)
     # RUN_MODE=apply (default) → applies for IPOs
     mode = os.getenv("RUN_MODE", "apply").lower()
     if mode == "check_status":
-        run_meroshare_api_result_check()
-    elif mode == "check_status_cdsc":
         run_status_check()
+    elif mode == "check_status_api":
+        run_meroshare_api_result_check()
     else:
         run_automation()
