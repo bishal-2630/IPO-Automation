@@ -1582,60 +1582,25 @@ def run_status_check():
 
     with sync_playwright() as p:
         headless = os.getenv("HEADLESS", "true").lower() == "true"
-        # Launch with official Chrome channel for ultimate stealth
-        try:
-            browser = p.chromium.launch(
-                headless=headless,
-                channel="chrome", # Uses real Chrome instead of Chromium
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-infobars',
-                    '--window-size=1280,720'
-                ]
-            )
-        except:
-            # Fallback to default if Chrome not installed (e.g. on GitHub)
-            browser = p.chromium.launch(
-                headless=headless,
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-infobars',
-                    '--window-size=1280,720'
-                ]
-            )
+        # Simple but powerful stealth
+        browser = p.chromium.launch(
+            headless=headless,
+            ignore_default_args=['--enable-automation'], # CRITICAL: Hides the "automated" flag
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-infobars',
+                '--window-size=1280,720'
+            ]
+        )
 
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 720},
-            permissions=['geolocation'],
-            geolocation={'latitude': 27.7172, 'longitude': 85.3240},
-            extra_http_headers={
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-                "Sec-Ch-Ua-Mobile": "?0",
-                "Sec-Ch-Ua-Platform": '"Windows"'
-            }
+            viewport={'width': 1280, 'height': 720}
         )
 
-        # Advanced Stealth Injection
-        stealth_script = """
-        (() => {
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-            window.chrome = { runtime: {} };
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                if (parameter === 37445) return 'Intel Open Source Technology Center';
-                if (parameter === 37446) return 'Mesa DRI Intel(R) HD Graphics 520 (Skylake GT2)';
-                return getParameter.apply(this, arguments);
-            };
-        })();
-        """
-        context.add_init_script(stealth_script)
+        # Basic Stealth Injection (Proven to work)
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page = context.new_page()
         
 
