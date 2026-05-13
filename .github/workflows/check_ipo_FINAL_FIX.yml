@@ -3,6 +3,10 @@ name: IPO RESULT FINAL FIX
 
 on:
   workflow_dispatch:
+  schedule:
+    # Runs at 04:15 UTC (10:00 AM Kathmandu) and 08:15 UTC (02:00 PM Kathmandu) every day
+    - cron: '15 4 * * *'
+    - cron: '15 8 * * *'
 
 jobs:
   check-results:

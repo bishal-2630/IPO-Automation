@@ -17,3 +17,4 @@ easyocr
 opencv-python-headless
 requests
 gunicorn
+Pillow

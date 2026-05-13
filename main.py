@@ -19,6 +19,10 @@ from expiry_handler import (
     handle_expired_account,
 )
 # easyocr imported locally in run_status_check
+try:
+    from PIL import Image, ImageEnhance
+except ImportError:
+    pass
 
 
 # Silence playwright logs
@@ -1239,6 +1243,208 @@ def run_automation():
 
 
 
+def run_meroshare_api_result_check():
+    """
+    Checks IPO allotment results via MeroShare's internal REST API.
+    No captcha, no browser, no CDSC portal dependency.
+    Uses requests library to authenticate and fetch application reports.
+    """
+    import requests
+
+    BASE_URL = "https://backend.cdsc.com.np/api/meroShare"
+    accounts = get_accounts()
+    if not accounts:
+        print("Error: No accounts found.")
+        return
+
+    print(f"[MeroShare API] Checking allotment for {len(accounts)} account(s)...")
+
+    # Step 1: Get DP list (maps DP name to clientId)
+    try:
+        dp_resp = requests.get(f"{BASE_URL}/capital/", timeout=15)
+        dp_list = dp_resp.json() if dp_resp.status_code == 200 else []
+    except Exception as e:
+        print(f"[MeroShare API] Failed to fetch DP list: {e}")
+        dp_list = []
+
+    def get_client_id(dp_name):
+        """Fuzzy match DP name to clientId from the capital list."""
+        dp_lower = dp_name.lower().strip()
+        # Remove common suffixes to get a simpler key (e.g., 'nic asia bank ltd.' -> 'nic asia')
+        dp_words = [w for w in re.split(r'[\s.]+', dp_lower) if len(w) > 2 and w not in ('ltd', 'bank', 'limited', 'securities', 'capital', 'finance')]
+        
+        best_id = None
+        best_score = 0
+        for dp in dp_list:
+            name = (dp.get("name") or "").lower()
+            score = sum(1 for w in dp_words if w in name)
+            if score > best_score:
+                best_score = score
+                best_id = dp.get("id")
+        
+        if best_score == 0:
+            print(f"  [DP Lookup] Available DPs: {[dp.get('name') for dp in dp_list[:10]]}")
+        return best_id if best_score > 0 else None
+
+    applied_companies = get_applied_companies()
+    applied_normalized = {
+        re.sub(r'\(.*?\)', '', c).lower().replace('limited', 'ltd').replace('ltd.', 'ltd').strip().rstrip('.'): c
+        for c in applied_companies
+    }
+
+    for account in accounts:
+        username = account.get("MEROSHARE_USER")
+        password = account.get("MEROSHARE_PASS")
+        dp_name = account.get("DP_NAME", "")
+        print(f"\n[{username}] Authenticating via MeroShare API...")
+
+        client_id = get_client_id(dp_name)
+        if not client_id:
+            print(f"[{username}] Could not find clientId for DP '{dp_name}'. Skipping account (clientId is required).")
+            continue
+        print(f"[{username}] Found clientId: {client_id}")
+
+        # Authenticate
+        try:
+            auth_resp = requests.post(
+                f"{BASE_URL}/auth/",
+                json={"clientId": client_id, "username": username, "password": password},
+                headers={"Content-Type": "application/json"},
+                timeout=20
+            )
+            if auth_resp.status_code != 200:
+                print(f"[{username}] Login failed: {auth_resp.status_code} {auth_resp.text[:200]}")
+                continue
+
+            token = auth_resp.headers.get("Authorization") or auth_resp.json().get("token")
+            if not token:
+                # Sometimes it's in the body
+                token = auth_resp.json().get("accessToken") or auth_resp.json().get("Authorization")
+            if not token:
+                print(f"[{username}] No auth token in response. Cannot proceed.")
+                continue
+
+            print(f"[{username}] Authenticated successfully.")
+
+        except Exception as e:
+            print(f"[{username}] Auth error: {e}")
+            continue
+
+        headers = {
+            "Authorization": token,
+            "Content-Type": "application/json"
+        }
+
+        # Use a session for better consistency
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Content-Type": "application/json",
+            "Origin": "https://meroshare.cdsc.com.np",
+            "Referer": "https://meroshare.cdsc.com.np/",
+            "Authorization": token if token.startswith("Bearer ") else f"Bearer {token}"
+        })
+
+        # Fetch application report
+        try:
+            # Try without trailing slash and with better headers
+            REPORT_URL = "https://backend.cdsc.com.np/api/meroShareRole/applicantForm/report/search"
+            
+            report_resp = session.post(
+                REPORT_URL,
+                json={
+                    "filterFieldParams": [],
+                    "filterDateParams": [],
+                    "searchScript": "",
+                    "page": 1,
+                    "size": 20
+                },
+                timeout=20
+            )
+
+            print(f"[{username}] Report status: {report_resp.status_code}")
+            if report_resp.status_code != 200:
+                print(f"[{username}] Report fetch failed. Response: {report_resp.text[:300]}")
+                continue
+
+            report_data = report_resp.json()
+            applications = report_data.get("object")
+            if applications is None:
+                applications = report_data if isinstance(report_data, list) else []
+            
+            print(f"[{username}] Found {len(applications)} application(s).")
+
+        except Exception as e:
+            print(f"[{username}] Error fetching report: {e}")
+            continue
+
+        for app in applications:
+            company_name = app.get("companyName", "")
+            status_desc = (app.get("statusDescription") or app.get("status") or "").strip()
+            applicant_form_id = app.get("applicantFormId") or app.get("id")
+
+            # Check if this is one of our applied companies
+            norm_company = re.sub(r'\(.*?\)', '', company_name).lower().replace('limited', 'ltd').replace('ltd.', 'ltd').strip().rstrip('.')
+            matched_original = None
+            for norm, original in applied_normalized.items():
+                if norm in norm_company or norm_company in norm:
+                    matched_original = original
+                    break
+
+            if not matched_original:
+                continue
+
+            print(f"[{username}] {company_name}: {status_desc}")
+
+            # Determine allotment
+            status_lower = status_desc.lower()
+            if "allot" in status_lower:
+                # Try to get detail for kitta count
+                kitta_count = app.get("appliedKitta") or app.get("kittaAlloted") or "?"
+                feedback = f"Congratulations! You have been allotted {kitta_count} unit(s)."
+                status_category = "Allotted"
+            elif "not allot" in status_lower or "unsuccessful" in status_lower:
+                feedback = "Sorry, you were not allotted shares for this IPO."
+                status_category = "Not Allotted"
+            else:
+                # Still pending or other status
+                print(f"[{username}] {company_name} status: '{status_desc}' (pending/other). Skipping notification.")
+                continue
+
+            print(f"[{username}] Result: {status_category} - {feedback}")
+            send_push_notification(account.get("TOKENS"), username, f"{company_name}: {feedback}")
+
+            # Save to DB
+            if os.getenv("DATABASE_URL"):
+                try:
+                    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+                    cur = conn.cursor()
+                    # Avoid duplicate logs
+                    cur.execute(
+                        "SELECT id FROM automation_applicationlog WHERE account_id = %s AND company_name = %s AND status IN ('Allotted', 'Not Allotted')",
+                        (account.get("ID"), company_name)
+                    )
+                    if cur.fetchone():
+                        print(f"[{username}] Result already logged for {company_name}. Skipping DB insert.")
+                    else:
+                        cur.execute("""
+                            INSERT INTO automation_applicationlog
+                                (account_id, company_name, status, remark, timestamp, is_read)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (account.get("ID"), company_name, status_category, feedback,
+                              datetime.datetime.now(datetime.timezone.utc), (status_category == "Allotted")))
+                        conn.commit()
+                        print(f"[{username}] Result saved to database.")
+                    cur.close()
+                    conn.close()
+                except Exception as e:
+                    print(f"[{username}] DB error: {e}")
+
+    print("\n[MeroShare API] Result check complete.")
+
+
 def solve_captcha(page, reader, max_retries=5):
     """
     Solves the CDSC IPO Result captcha using EasyOCR.
@@ -1247,25 +1453,88 @@ def solve_captcha(page, reader, max_retries=5):
         try:
             print(f"  [Captcha] Attempt {attempt + 1}/{max_retries}...")
             
-            # Locate the captcha image
-            # The CDSC portal usually has the image next to the input
-            captcha_img = page.locator("img[src*='captcha']").first
-            if not captcha_img.is_visible():
-                # Fallback: find any image near the captcha input
-                captcha_img = page.locator("input#captcha + img, .captcha-image img").first
+            # 1. Wait for captcha image to be visible (more patient)
+            captcha_selectors = [
+                "img[src*='captcha']",
+                "img[src*='Captcha']",
+                ".captcha-image img",
+                "input#captcha + img",
+                "img[alt*='captcha']",
+                "#captcha + div img"
+            ]
             
-            if not captcha_img.is_visible():
-                print("  ⚠️ Captcha image not found. Refreshing page...")
-                page.reload()
-                page.wait_for_timeout(2000)
+            captcha_img = None
+            for selector in captcha_selectors:
+                try:
+                    loc = page.locator(selector).first
+                    # Wait up to 3 seconds for the image to be visible
+                    loc.wait_for(state="visible", timeout=3000)
+                    captcha_img = loc
+                    break
+                except:
+                    continue
+            
+            # 2. Final check and debug info if not found
+            if not captcha_img or not captcha_img.is_visible():
+                print("  ⚠️ Captcha image not found with standard selectors.")
+                
+                # Debug: Log all images on page
+                try:
+                    all_imgs = page.query_selector_all("img")
+                    if all_imgs:
+                        print(f"  [Debug] Found {len(all_imgs)} images on page:")
+                        for i, img in enumerate(all_imgs[:5]): # Log first 5
+                            src = page.evaluate("(el) => el.src", img)
+                            print(f"    - Img {i}: {src[:100]}...")
+                except: pass
+                
+                # Save screenshot for debug
+                try:
+                    os.makedirs("screenshots", exist_ok=True)
+                    page.screenshot(path=f"screenshots/captcha_not_found_att{attempt+1}.png")
+                except: pass
+                
+                # Try clicking refresh button before reloading entire page
+                refresh_btn = page.locator(".fa-refresh, .refresh-captcha, button:has-text('Refresh')").first
+                if refresh_btn.is_visible():
+                    print("  [Captcha] Clicking refresh button...")
+                    refresh_btn.click()
+                    page.wait_for_timeout(2000)
+                else:
+                    print("  ⚠️ Refresh button not found. Reloading page...")
+                    page.reload()
+                    page.wait_for_timeout(4000)
                 continue
 
             # Take a screenshot of the captcha element
-            img_bytes = captcha_img.screenshot()
+            captcha_bytes = captcha_img.screenshot()
             
+            # --- IMAGE ENHANCEMENT BLOCK ---
+            try:
+                import io
+                img = Image.open(io.BytesIO(captcha_bytes))
+                img = img.convert('L') # Grayscale
+                
+                # Increase contrast
+                enhancer = ImageEnhance.Contrast(img)
+                img = enhancer.enhance(2.0)
+                
+                # Increase sharpness
+                sharpness = ImageEnhance.Sharpness(img)
+                img = sharpness.enhance(2.0)
+                
+                # Save to buffer
+                buf = io.BytesIO()
+                img.save(buf, format='PNG')
+                processed_bytes = buf.getvalue()
+            except Exception as e:
+                print(f"  [Captcha] Image processing failed: {e}. Using raw image.")
+                processed_bytes = captcha_bytes
+            # -------------------------------
+
             # Use EasyOCR to read text
             # CDSC captchas are usually 5 digits
-            results = reader.readtext(img_bytes)
+            results = reader.readtext(processed_bytes)
             
             if results:
                 # Filter for digits only
@@ -1295,7 +1564,7 @@ def solve_captcha(page, reader, max_retries=5):
     return None
 
 def run_status_check():
-    print("--- IPO Result Check Version: 2026-05-13 V4 ---")
+    print("--- IPO Result Check Version: 2026-05-13 V5 ---")
     """
     Official CDSC Portal Result Check (With AI Captcha Solving).
     """
@@ -1304,7 +1573,7 @@ def run_status_check():
         print("Error: No accounts found.")
         return
 
-    print(f"🔍 Official CDSC Status Check: Processing {len(accounts)} account(s)...")
+    print(f"Official CDSC Status Check: Processing {len(accounts)} account(s)...")
 
     # Initialize OCR Reader (Done once per run)
     print("  [AI] Initializing EasyOCR...")
@@ -1323,12 +1592,17 @@ def run_status_check():
             ]
         )
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={'width': 1280, 'height': 720},
             permissions=['geolocation'],
             geolocation={'latitude': 27.7172, 'longitude': 85.3240},
-            extra_http_headers={"Accept-Language": "ne-NP,ne;q=0.9,en-US;q=0.8"}
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+            }
         )
+        # Stealth: Mask navigator.webdriver
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page = context.new_page()
         
 
@@ -1336,8 +1610,17 @@ def run_status_check():
             url = "https://iporesult.cdsc.com.np/"
             print(f"Navigating to {url}...")
             page.goto(url, timeout=60000, wait_until='domcontentloaded')
-            print("  Page loaded. Waiting for Angular to initialize...")
-            page.wait_for_timeout(6000)
+            print("  Page loaded. Checking for blocks...")
+            page.wait_for_timeout(3000)
+            
+            title = page.title()
+            if "Rejected" in title or "Forbidden" in title:
+                print("  [CRITICAL] Request Rejected by CDSC Firewall (WAF).")
+                print("  This usually means your IP is temporarily blocked. Please wait or use a VPN/Proxy.")
+                return
+            
+            print("  Waiting for Angular to initialize...")
+            page.wait_for_timeout(4000)
             
             # Wait for the dropdown to be visible
             try:
@@ -1346,9 +1629,9 @@ def run_status_check():
                     "ng-select, select#companyShare, .ng-select-container",
                     timeout=45000
                 )
-                print("  ✅ Portal ready.")
+                print("  [Portal] Ready.")
             except Exception as e:
-                print(f"  ❌ Portal took too long to load: {e}")
+                print(f"  [Error] Portal took too long to load: {e}")
                 os.makedirs("screenshots", exist_ok=True)
                 page.screenshot(path="screenshots/portal_load_fail.png")
                 with open("screenshots/portal_page_source.html", "w") as f:
@@ -1434,10 +1717,10 @@ def run_status_check():
                     break
             
             if not is_applied:
-                print(f"  ⏭️  '{first_company}' — Not in our applied list. Nothing to check.")
+                print(f"  [Skip] '{first_company}' — Not in our applied list. Nothing to check.")
                 return
             
-            print(f"  🎯 MATCH FOUND: '{first_company}' matches DB entry '{matched_db_name}'. Proceeding to result check...")
+            print(f"  [Match] Found: '{first_company}' matches DB entry '{matched_db_name}'. Proceeding to result check...")
 
             # ── STEP 3: Select the company in the dropdown ─────────────────────
             page.keyboard.press("Escape")
@@ -1447,14 +1730,14 @@ def run_status_check():
             page.type("ng-select input", first_company, delay=50)
             page.wait_for_timeout(1200)
             page.keyboard.press("Enter")
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(2000)
 
             # Verify BOID form appeared
             try:
                 page.wait_for_selector("input#boid, input[name='boid']", timeout=8000)
-                print("  ✅ BOID form visible. Starting account checks...")
+                print("  [Form] BOID form visible. Starting account checks...")
             except:
-                print(f"  ❌ BOID form did not appear after selecting '{first_company}'. Results may not be published yet.")
+                print(f"  [Error] BOID form did not appear after selecting '{first_company}'. Results may not be published yet.")
                 return
 
             # Now check for each account for this company
@@ -1577,10 +1860,13 @@ def get_applied_companies():
         return []
 
 if __name__ == "__main__":
-    # RUN_MODE=check_status → runs the status watchdog
+    # RUN_MODE=check_status → runs the result check via MeroShare API (no captcha)
+    # RUN_MODE=check_status_cdsc → uses the CDSC portal browser method (requires captcha)
     # RUN_MODE=apply (default) → applies for IPOs
     mode = os.getenv("RUN_MODE", "apply").lower()
     if mode == "check_status":
+        run_meroshare_api_result_check()
+    elif mode == "check_status_cdsc":
         run_status_check()
     else:
         run_automation()
