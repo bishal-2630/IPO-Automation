@@ -514,10 +514,8 @@ def login(page, username, password, dp_name):
                  page.keyboard.press("Enter")
                  page.wait_for_timeout(1000)
 
-        # 2. Type a more specific prefix of the DP name for better results
-        # e.g., "NABIL INVESTMENT BANKING LTD." -> "NABIL INVESTMENT"
-        words = dp_name.split()
-        dp_prefix = " ".join(words[:2]) if len(words) > 1 else dp_name
+        # 2. Type the first word only to ensure the list populates
+        dp_prefix = dp_name.split()[0] if dp_name.split() else dp_name
         
         search_box = page.locator(".select2-search__field, .select2-search input").first
         search_box.wait_for(state="visible", timeout=5000)
@@ -606,6 +604,12 @@ def login(page, username, password, dp_name):
         page.screenshot(path=f"debug_login_dp_{username}.png")
 
     page.wait_for_timeout(1000)
+    
+    # Final check: is DP selected?
+    actual_dp = page.inner_text(".select2-selection__rendered, .select2-selection").strip()
+    if "select" in actual_dp.lower() or not actual_dp:
+        print(f"  ❌ DP Selection failed (Page shows '{actual_dp}'). Cannot proceed with login.")
+        return False
 
     # Ensure no Select2 overlays are blocking the input
     try:
