@@ -90,14 +90,58 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
+      drawer: Drawer(
+        backgroundColor: Colors.white,
+        child: Column(
+          children: [
+            DrawerHeader(
+              decoration: BoxDecoration(color: Colors.deepPurple),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.show_chart, color: Colors.white, size: 48),
+                    SizedBox(height: 10),
+                    Text(
+                      "IPO AUTOMATION",
+                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            _buildDrawerItem(
+              icon: Icons.wallet,
+              label: "Accounts",
+              index: 0,
+            ),
+            _buildDrawerItem(
+              icon: Icons.insights,
+              label: "Upcoming Issues",
+              index: 2, # Index 2 for upcoming
+            ),
+            _buildDrawerItem(
+              icon: Icons.notifications_none,
+              label: "Notifications",
+              index: 1,
+              badgeCount: _unreadCount,
+            ),
+            Spacer(),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Text("Version 1.0.0", style: TextStyle(color: Colors.grey[600])),
+            ),
+          ],
+        ),
+      ),
       body: IndexedStack(
         index: _selectedIndex,
         children: [
           _buildAccountsTab(),
           DashboardScreen(),
+          Center(child: Text("Upcoming IPO Calendar", style: TextStyle(color: Colors.white))), # Placeholder for now
         ],
       ),
-      bottomNavigationBar: _buildBottomNav(),
     );
   }
 
@@ -359,14 +403,34 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildBottomNav() {
-    return BottomNavigationBar(
-      backgroundColor: Colors.black87,
-      selectedItemColor: Colors.amber,
-      unselectedItemColor: Colors.grey,
-      currentIndex: _selectedIndex,
-      type: BottomNavigationBarType.fixed,
-      onTap: (index) {
+  Widget _buildDrawerItem({required IconData icon, required String label, required int index, int badgeCount = 0}) {
+    final bool isSelected = _selectedIndex == index;
+    return ListTile(
+      leading: Stack(
+        children: [
+          Icon(icon, color: isSelected ? Colors.deepPurple : Colors.grey),
+          if (badgeCount > 0)
+            Positioned(
+              right: -2,
+              top: -2,
+              child: Container(
+                padding: EdgeInsets.all(2),
+                decoration: BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                constraints: BoxConstraints(minWidth: 12, minHeight: 12),
+                child: Text('$badgeCount', style: TextStyle(color: Colors.white, fontSize: 8)),
+              ),
+            ),
+        ],
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          color: isSelected ? Colors.deepPurple : Colors.black87,
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+      selected: isSelected,
+      onTap: () {
         setState(() {
           _selectedIndex = index;
           if (index == 1) {
@@ -374,36 +438,8 @@ class _HomeScreenState extends State<HomeScreen> {
             api.markLogsAsRead();
           }
         });
+        Navigator.pop(context); // Close drawer
       },
-      items: [
-        BottomNavigationBarItem(icon: Icon(Icons.wallet), label: 'Accounts'),
-        BottomNavigationBarItem(
-          icon: Stack(
-            children: [
-              Icon(Icons.notifications),
-              if (_unreadCount > 0)
-                Positioned(
-                  right: 0,
-                  top: 0,
-                  child: Container(
-                    padding: EdgeInsets.all(2),
-                    decoration: BoxDecoration(
-                      color: Colors.red,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    constraints: BoxConstraints(minWidth: 16, minHeight: 16),
-                    child: Text(
-                      '$_unreadCount',
-                      style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          label: 'Status',
-        ),
-      ],
     );
   }
 }

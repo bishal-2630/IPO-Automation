@@ -3,6 +3,8 @@ import psycopg2
 from playwright.sync_api import sync_playwright
 from datetime import datetime, timedelta
 
+from notifications import broadcast_push_notification
+
 # Configuration
 UPCOMING_URL = "https://www.sharesansar.com/upcoming-issue"
 
@@ -98,7 +100,12 @@ def save_to_db(data):
     conn = psycopg2.connect(db_url)
     cur = conn.cursor()
     
+    new_count = 0
     for item in data:
+        # Check if it already exists to avoid duplicate notifications
+        cur.execute("SELECT id FROM automation_upcomingipo WHERE company_name = %s", (item['company'],))
+        is_new = cur.fetchone() is None
+
         # Determine status
         status = "COMING SOON"
         try:
@@ -129,11 +136,25 @@ def save_to_db(data):
                 status = EXCLUDED.status,
                 last_updated = NOW();
         """, (item['company'], item['symbol'], item['units'], item['price'], item['manager'], item['open'], item['close'], item['category'], status))
+        
+        if is_new:
+            new_count += 1
+            print(f"  [New IPO] {item['company']} found! Sending notification...")
+            broadcast_push_notification(
+                title="Upcoming IPO",
+                body=f"{item['company']} is opening on {item['open']}."
+            )
     
     conn.commit()
     cur.close()
     conn.close()
-    print(f"Successfully updated {len(data)} upcoming issues in the database.")
+    print(f"Successfully updated {len(data)} upcoming issues in the database. ({new_count} new)")
+
+if __name__ == "__main__":
+    init_db()
+    data = scrape_upcoming()
+    if data:
+        save_to_db(data)
 
 if __name__ == "__main__":
     init_db()
