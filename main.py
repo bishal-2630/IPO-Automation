@@ -1570,7 +1570,7 @@ def solve_captcha(page, reader, max_retries=5):
     return None
 
 def run_status_check():
-    print("--- IPO Result Check Version: 2026-05-13 V13 (Advanced Scanning) ---")
+    print("--- IPO Result Check Version: 2026-05-13 V14 (Hybrid) ---")
     """
     Official CDSC Portal Result Check (With AI Captcha Solving).
     """
@@ -1588,27 +1588,14 @@ def run_status_check():
 
     with sync_playwright() as p:
         headless = os.getenv("HEADLESS", "true").lower() == "true"
-        # Simple but powerful stealth
         browser = p.chromium.launch(
             headless=headless,
-            ignore_default_args=['--enable-automation'], # CRITICAL: Hides the "automated" flag
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-infobars',
-                '--window-size=1280,720'
-            ]
+            args=['--no-sandbox', '--disable-setuid-sandbox']
         )
-
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={'width': 1280, 'height': 720}
         )
-
-        # Basic Stealth Injection (Proven to work)
-        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page = context.new_page()
-        
 
         try:
             url = "https://iporesult.cdsc.com.np/"
