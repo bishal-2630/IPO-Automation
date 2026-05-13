@@ -1358,16 +1358,32 @@ def run_status_check():
             
             # Click the container and wait for the panel
             try:
-                page.locator(".ng-select-container").first.click()
-                page.wait_for_selector(".ng-dropdown-panel", timeout=5000)
-            except:
-                print("  ⚠️ Native click failed. Trying dispatch event...")
-                page.dispatch_event(".ng-select-container", "click")
+                # Try clicking the arrow first
+                arrow = page.locator(".ng-arrow-wrapper").first
+                if arrow.is_visible():
+                    arrow.click()
+                else:
+                    page.locator(".ng-select-container").first.click()
+                
                 page.wait_for_timeout(2000)
+                
+                # If panel still not visible, try typing a space or letter
+                if not page.locator(".ng-dropdown-panel").is_visible():
+                    print("  ⚠️ Dropdown panel not visible. Typing to force open...")
+                    page.focus(".ng-select-container input")
+                    page.keyboard.type("a")
+                    page.wait_for_timeout(1000)
+                    page.keyboard.press("Backspace")
+                    page.wait_for_timeout(1000)
+            except Exception as e:
+                print(f"  ⚠️ Dropdown interaction error: {e}")
 
             first_company = page.evaluate("""
                 () => {
-                    const options = Array.from(document.querySelectorAll('.ng-option, .ng-option-label'));
+                    // Look inside the panel specifically
+                    const panel = document.querySelector('.ng-dropdown-panel');
+                    const options = panel ? Array.from(panel.querySelectorAll('.ng-option')) : Array.from(document.querySelectorAll('.ng-option'));
+                    
                     for (const opt of options) {
                         const text = opt.innerText.trim();
                         if (text && text.length > 5 && 
