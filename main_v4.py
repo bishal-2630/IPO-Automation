@@ -1292,12 +1292,36 @@ def run_status_check():
         headless = os.getenv("HEADLESS", "true").lower() == "true"
         browser = p.chromium.launch(
             headless=headless,
-            args=['--no-sandbox', '--disable-setuid-sandbox']
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-infobars',
+                '--disable-dev-shm-usage',
+                '--disable-extensions',
+                '--window-size=1280,800',
+                '--lang=en-US',
+            ]
         )
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 720}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={'width': 1280, 'height': 800},
+            locale='en-US',
+            timezone_id='Asia/Kathmandu',
+            geolocation={'latitude': 27.7172, 'longitude': 85.3240},
+            permissions=['geolocation'],
+            extra_http_headers={
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            }
         )
+        # Override navigator.webdriver to hide automation flag
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        """)
         page = context.new_page()
         
 
