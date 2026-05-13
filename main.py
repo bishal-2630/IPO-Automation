@@ -1304,18 +1304,20 @@ def run_status_check():
         try:
             url = "https://iporesult.cdsc.com.np/"
             print(f"Navigating to {url}...")
-            page.goto(url, timeout=60000, wait_until='networkidle')
-            page.wait_for_timeout(3000)
+            page.goto(url, timeout=60000, wait_until='domcontentloaded')
+            # Wait longer for anti-bot/challenge frames to settle
+            page.wait_for_timeout(5000)
             
             # 1. Open the company dropdown
             try:
                 # CDSC uses an Angular ng-select component
                 page.wait_for_selector("ng-select", timeout=15000)
-                page.click("ng-select")
+                # Use force=True to bypass challenge frame overlays
+                page.click("ng-select", force=True)
                 page.wait_for_timeout(1000)
                 
                 # Click the first option in the list (The latest IPO)
-                page.click(".ng-option:first-child, .ng-option")
+                page.click(".ng-option:first-child, .ng-option", force=True)
                 page.wait_for_timeout(1000)
                 
                 # Get the name of the selected company for logging
