@@ -18,7 +18,8 @@ from expiry_handler import (
     check_account_expiry_warning,
     handle_expired_account,
 )
-import easyocr
+# easyocr imported locally in run_status_check
+
 
 # Silence playwright logs
 logging.getLogger('playwright').setLevel(logging.ERROR)
@@ -1283,6 +1284,7 @@ def run_status_check():
 
     # Initialize OCR Reader (Done once per run)
     print("  [AI] Initializing EasyOCR...")
+    import easyocr
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
@@ -1297,9 +1299,6 @@ def run_status_check():
         )
         page = context.new_page()
         
-        # Initialize OCR Reader (Done once per run)
-        print("  [AI] Initializing EasyOCR...")
-        reader = easyocr.Reader(['en'], gpu=False)
 
         try:
             url = "https://iporesult.cdsc.com.np/"

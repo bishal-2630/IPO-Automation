@@ -18,16 +18,17 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Super Installation
+      - name: Optimized Installation
         run: |
           python -m pip install --upgrade pip
-          echo "--- Installing EasyOCR ---"
-          python -m pip install --no-cache-dir easyocr
-          echo "--- Installing Other Deps ---"
-          python -m pip install playwright python-dotenv psycopg2-binary firebase-admin cryptography opencv-python-headless
-          echo "--- Verifying ---"
-          python -m pip list | grep easyocr
+          echo "--- Installing Heavy Deps (CPU versions) ---"
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          echo "--- Installing Project Deps ---"
+          python -m pip install -r requirements.txt
+          echo "--- Playwright Setup ---"
           npx playwright install --with-deps chromium
+          echo "--- Verifying easyocr ---"
+          python -m pip list | grep easyocr
 
       - name: Run IPO Result Check
         env:

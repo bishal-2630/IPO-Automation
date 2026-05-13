@@ -13,5 +13,6 @@ cryptography
 whitenoise
 playwright
 easyocr
+opencv-python-headless
 requests
 gunicorn
