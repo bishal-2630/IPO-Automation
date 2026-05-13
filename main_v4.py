@@ -1315,12 +1315,23 @@ def run_status_check():
                 print("No successful applications found in database to check.")
                 return
 
+            # Wait for the dropdown to be visible ONCE before starting the loop
+            # This handles the initial anti-bot/challenge delay
+            try:
+                print("  Waiting for CDSC portal to be ready...")
+                page.wait_for_selector("ng-select", timeout=30000)
+                print("  ✅ Portal ready.")
+            except Exception as e:
+                print(f"  ❌ Portal took too long to load: {e}")
+                os.makedirs("screenshots", exist_ok=True)
+                page.screenshot(path="screenshots/portal_load_fail.png")
+                return
+
             for target_company in applied_companies:
                 print(f"\n--- Checking Results for: {target_company} ---")
                 
                 try:
-                    # 1. Open and search in the company dropdown
-                    page.wait_for_selector("ng-select", timeout=15000)
+                    # Dropdown should already be visible now
                     
                     print(f"  Searching for '{target_company}'...")
                     page.dispatch_event("ng-select", "click")
