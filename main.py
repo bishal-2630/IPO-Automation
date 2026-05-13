@@ -1305,30 +1305,47 @@ def run_status_check():
             url = "https://iporesult.cdsc.com.np/"
             print(f"Navigating to {url}...")
             page.goto(url, timeout=60000, wait_until='domcontentloaded')
-            # Wait longer for anti-bot/challenge frames to settle
             page.wait_for_timeout(5000)
             
-            # 1. Open the company dropdown
-            try:
-                # CDSC uses an Angular ng-select component
-                page.wait_for_selector("ng-select", timeout=15000)
-                # Use force=True to bypass challenge frame overlays
-                page.click("ng-select", force=True)
-                page.wait_for_timeout(1000)
-                
-                # Click the first option in the list (The latest IPO)
-                page.click(".ng-option:first-child, .ng-option", force=True)
-                page.wait_for_timeout(1000)
-                
-                # Get the name of the selected company for logging
-                company_name = page.inner_text("ng-select").strip().split('\n')[0]
-                print(f"Latest Company Selected: {company_name}")
-            except Exception as e:
-                print(f"Error selecting company: {e}")
+            # Fetch companies that were successfully applied for from the DB
+            print("Fetching applied companies from database...")
+            applied_companies = get_applied_companies()
+            
+            if not applied_companies:
+                print("No successful applications found in database to check.")
                 return
 
-            # Now check for each account
-            for account in accounts:
+            for target_company in applied_companies:
+                print(f"\n--- Checking Results for: {target_company} ---")
+                
+                try:
+                    # 1. Open and search in the company dropdown
+                    page.wait_for_selector("ng-select", timeout=15000)
+                    
+                    print(f"  Searching for '{target_company}'...")
+                    page.dispatch_event("ng-select", "click")
+                    page.wait_for_timeout(500)
+                    
+                    # Type the company name into the search input of ng-select
+                    # Angular ng-select usually has an input inside it
+                    page.type("ng-select input", target_company, delay=50)
+                    page.wait_for_timeout(1000)
+                    
+                    # Press Enter to select the filtered result
+                    page.keyboard.press("Enter")
+                    page.wait_for_timeout(1000)
+                    
+                    # Verify selection
+                    selected_text = page.inner_text("ng-select").strip()
+                    if target_company.lower() not in selected_text.lower():
+                        print(f"  ⚠️ Warning: Could not confirm selection of {target_company}. Selected: {selected_text}")
+                        # Continue anyway as sometimes the text match is partial
+                except Exception as e:
+                    print(f"  ❌ Error selecting {target_company}: {e}")
+                    continue
+
+                # Now check for each account for THIS company
+                for account in accounts:
                 username = account.get('MEROSHARE_USER')
                 boid = account.get('BOID')
                 
@@ -1457,6 +1474,25 @@ def run_status_check():
     
     print("\nGlobal IME status check run complete.")
 
+
+def get_applied_companies():
+    """
+    Fetches unique company names from ApplicationLog where status is 'Success'.
+    """
+    DB_URL = os.environ.get("DATABASE_URL")
+    if not DB_URL:
+        return []
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT company_name FROM automation_applicationlog WHERE status = 'Success'")
+        companies = [row[0] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return [c for c in companies if c]
+    except Exception as e:
+        print(f"Error fetching companies: {e}")
+        return []
 
 if __name__ == "__main__":
     # RUN_MODE=check_status → runs the status watchdog
