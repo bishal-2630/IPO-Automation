@@ -1346,124 +1346,96 @@ def run_status_check():
 
                 # Now check for each account for THIS company
                 for account in accounts:
-                username = account.get('MEROSHARE_USER')
-                boid = account.get('BOID')
-                
-                if not boid:
-                    print(f"[{username}] Skipping: No BOID.")
-                    continue
+                    username = account.get('MEROSHARE_USER')
+                    boid = account.get('BOID')
+                    
+                    if not boid:
+                        print(f"[{username}] Skipping: No BOID.")
+                        continue
 
-                # 2. Get Applied IPOs for this account to see if they match the portal
-                # In a real run, we might fetch this from the DB or a quick MeroShare check
-                # For now, we'll check the DB for 'Applied' status logs
-                applied_companies = []
-                if os.getenv("DATABASE_URL"):
-                    try:
-                        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-                        cur = conn.cursor()
-                        # Get companies applied for in the last 30 days
-                        cur.execute("""
-                            SELECT DISTINCT company_name FROM automation_applicationlog 
-                            WHERE account_id = %s AND status = 'Applied'
-                            AND timestamp > NOW() - INTERVAL '30 days'
-                        """, (account.get('ID'),))
-                        applied_companies = [row[0].lower() for row in cur.fetchall()]
-                        cur.close()
-                        conn.close()
-                    except: pass
-
-                # SMART MATCH: Check if the portal's top company is in our applied list
-                # Use fuzzy matching or partial string matching
-                is_match = any(applied_comp in company_name.lower() or company_name.lower() in applied_comp 
-                               for applied_comp in applied_companies)
-                
-                if not is_match and applied_companies:
-                    print(f"[{username}] Skipping: Latest portal IPO ({company_name}) does not match any recent applications.")
-                    continue
-                elif not applied_companies:
-                    print(f"[{username}] No recent application history found in DB. Checking anyway as fallback...")
-
-                # Try to solve and submit
-                success_found = False
-                for attempt in range(5): # Outer loop for entire form retry
-                    try:
-                        # 1. Fill BOID
-                        page.fill("input#boid, input[name='boid']", boid)
-                        
-                        # 2. Solve Captcha
-                        captcha_code = solve_captcha(page, reader)
-                        if not captcha_code:
-                            print(f"  [{username}] Could not solve captcha. Skipping account.")
-                            break
+                    # Try to solve and submit
+                    success_found = False
+                    for attempt in range(5): # Outer loop for entire form retry
+                        try:
+                            # 1. Fill BOID
+                            page.fill("input#boid, input[name='boid']", boid)
                             
-                        page.fill("input#captcha, input[name='userCaptcha']", captcha_code)
-                        
-                        # 3. Submit
-                        page.click("button[type='submit'], .btn-submit")
-                        page.wait_for_timeout(3000)
-                        
-                        # 4. Check for result or error
-                        res_info = page.evaluate("""
-                            () => {
-                                const bodyText = document.body.innerText.toLowerCase();
-                                if (bodyText.includes("congratulations") || bodyText.includes("allotted")) {
-                                    const msg = document.querySelector('.text-success, h3, p')?.innerText || "Allotted";
-                                    return "Allotted|" + msg;
-                                }
-                                if (bodyText.includes("not allotted") || bodyText.includes("sorry")) {
-                                    return "Not Allotted|Sorry, you are not allotted for this IPO.";
-                                }
-                                if (bodyText.includes("invalid captcha")) {
-                                    return "RETRY_CAPTCHA|Invalid Captcha";
-                                }
-                                return "Unknown|No result detected";
-                            }
-                        """)
-                        
-                        if res_info.startswith("RETRY_CAPTCHA"):
-                            print(f"  [{username}] AI misread captcha. Retrying...")
-                            # Clear fields and refresh captcha if needed
-                            page.click(".fa-refresh, .refresh-captcha")
-                            page.wait_for_timeout(1000)
-                            continue
-                        
-                        status_category, feedback = res_info.split("|", 1)
-                        print(f"[{username}] Result: {status_category} - {feedback}")
-                        
-                        if status_category != "Unknown":
-                            send_push_notification(account.get('TOKENS'), username, f"{company_name}: {feedback}")
-                            # Save to DB
-                            if os.getenv("DATABASE_URL"):
-                                try:
-                                    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-                                    cur = conn.cursor()
-                                    cur.execute("""
-                                        INSERT INTO automation_applicationlog
-                                            (account_id, company_name, status, remark, timestamp, is_read)
-                                        VALUES (%s, %s, %s, %s, %s, %s)
-                                    """, (account.get('ID'), company_name, status_category, feedback,
-                                          datetime.datetime.now(datetime.timezone.utc), (status_category == "Allotted")))
-                                    conn.commit()
-                                    cur.close()
-                                    conn.close()
-                                except: pass
+                            # 2. Solve Captcha
+                            captcha_code = solve_captcha(page, reader)
+                            if not captcha_code:
+                                print(f"  [{username}] Could not solve captcha. Skipping account.")
+                                break
+                                
+                            page.fill("input#captcha, input[name='userCaptcha']", captcha_code)
                             
-                            success_found = True
-                            # Reset for next account
-                            page.click("button:has-text('Reset'), .btn-reset")
-                            page.wait_for_timeout(1000)
-                            break
-                        
-                    except Exception as e:
-                        print(f"  [{username}] Error: {e}")
-                        page.reload()
-                        page.wait_for_timeout(3000)
-                        
-                if not success_found:
-                     print(f"  [{username}] Could not verify result after multiple attempts.")
-                
-                # Small delay between accounts
-                page.wait_for_timeout(1000)
+                            # 3. Submit
+                            page.click("button[type='submit'], .btn-submit")
+                            page.wait_for_timeout(3000)
+                            
+                            # 4. Check for result or error
+                            res_info = page.evaluate("""
+                                () => {
+                                    const bodyText = document.body.innerText.toLowerCase();
+                                    if (bodyText.includes("congratulations") || bodyText.includes("allotted")) {
+                                        const msg = document.querySelector('.text-success, h3, p')?.innerText || "Allotted";
+                                        return "Allotted|" + msg;
+                                    }
+                                    if (bodyText.includes("not allotted") || bodyText.includes("sorry")) {
+                                        return "Not Allotted|Sorry, you are not allotted for this IPO.";
+                                    }
+                                    if (bodyText.includes("invalid captcha")) {
+                                        return "RETRY_CAPTCHA|Invalid Captcha";
+                                    }
+                                    return "Unknown|No result detected";
+                                }
+                            """)
+                            
+                            if res_info.startswith("RETRY_CAPTCHA"):
+                                print(f"  [{username}] AI misread captcha. Retrying...")
+                                # Clear fields and refresh captcha if needed
+                                page.click(".fa-refresh, .refresh-captcha")
+                                page.wait_for_timeout(1000)
+                                continue
+                            
+                            status_category, feedback = res_info.split("|", 1)
+                            print(f"[{username}] Result for {target_company}: {status_category} - {feedback}")
+                            
+                            if status_category != "Unknown":
+                                send_push_notification(account.get('TOKENS'), username, f"{target_company}: {feedback}")
+                                # Save to DB
+                                if os.getenv("DATABASE_URL"):
+                                    try:
+                                        import datetime
+                                        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+                                        cur = conn.cursor()
+                                        cur.execute("""
+                                            INSERT INTO automation_applicationlog
+                                                (account_id, company_name, status, remark, timestamp, is_read)
+                                            VALUES (%s, %s, %s, %s, %s, %s)
+                                        """, (account.get('ID'), target_company, status_category, feedback,
+                                              datetime.datetime.now(datetime.timezone.utc), (status_category == "Allotted")))
+                                        conn.commit()
+                                        cur.close()
+                                        conn.close()
+                                    except Exception as e:
+                                        print(f"  [DB] Failed to save result: {e}")
+                                
+                                success_found = True
+                                # Reset for next account
+                                page.click("button:has-text('Reset'), .btn-reset")
+                                page.wait_for_timeout(1000)
+                                break
+                            
+                        except Exception as e:
+                            print(f"  [{username}] Error: {e}")
+                            page.reload()
+                            page.wait_for_timeout(3000)
+                            
+                    if not success_found:
+                         print(f"  [{username}] Could not verify result for {target_company} after multiple attempts.")
+                    
+                    # Small delay between accounts
+                    page.wait_for_timeout(1000)
 
         except Exception as e:
             print(f"Error during status check: {e}")
