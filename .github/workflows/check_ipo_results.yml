@@ -1,0 +1,45 @@
+# Force Refresh Commit - V2
+name: Check IPO Results
+
+on:
+  workflow_dispatch:      # Allow manual triggering
+
+jobs:
+  check-results:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: user-part-1
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Optimized Installation
+        run: |
+          python3 -m pip install --upgrade pip setuptools wheel
+          echo "--- Disk Space ---"
+          df -h
+          echo "--- Installing Heavy Deps (CPU versions) ---"
+          python3 -m pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          echo "--- Installing EasyOCR and OpenCV ---"
+          python3 -m pip install --no-cache-dir easyocr opencv-python-headless
+          echo "--- Installing Other Deps ---"
+          python3 -m pip install --no-cache-dir -r requirements.txt
+          echo "--- Playwright Setup ---"
+          npx playwright install --with-deps chromium
+          echo "--- Debug Info ---"
+          python3 --version
+          python3 -m pip list
+          python3 -c "import easyocr; print('EasyOCR Import Success')"
+
+      - name: Run IPO Result Check
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
+          RUN_MODE: "check_status"
+          HEADLESS: "true"
+        run: python3 main.py
