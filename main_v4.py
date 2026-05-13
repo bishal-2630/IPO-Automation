@@ -1304,8 +1304,9 @@ def run_status_check():
         try:
             url = "https://iporesult.cdsc.com.np/"
             print(f"Navigating to {url}...")
-            page.goto(url, timeout=60000, wait_until='domcontentloaded')
-            page.wait_for_timeout(5000)
+            page.goto(url, timeout=60000, wait_until='networkidle')
+            print("  Page loaded. Waiting for Angular to initialize...")
+            page.wait_for_timeout(8000)
             
             # Fetch companies that were successfully applied for from the DB
             print("Fetching applied companies from database...")
@@ -1316,15 +1317,22 @@ def run_status_check():
                 return
 
             # Wait for the dropdown to be visible ONCE before starting the loop
-            # This handles the initial anti-bot/challenge delay
+            # ng-select is rendered by Angular, so we try multiple selectors
             try:
                 print("  Waiting for CDSC portal to be ready...")
-                page.wait_for_selector("ng-select", timeout=30000)
+                page.wait_for_selector(
+                    "ng-select, select#companyShare, .ng-select-container",
+                    timeout=45000
+                )
                 print("  ✅ Portal ready.")
             except Exception as e:
                 print(f"  ❌ Portal took too long to load: {e}")
+                # Save page source and screenshot for debugging
                 os.makedirs("screenshots", exist_ok=True)
                 page.screenshot(path="screenshots/portal_load_fail.png")
+                with open("screenshots/portal_page_source.html", "w") as f:
+                    f.write(page.content())
+                print("  [Debug] Screenshot and page source saved to screenshots/")
                 return
 
             for target_company in applied_companies:
