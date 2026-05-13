@@ -1324,7 +1324,10 @@ def run_status_check():
         )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 720}
+            viewport={'width': 1280, 'height': 720},
+            permissions=['geolocation'],
+            geolocation={'latitude': 27.7172, 'longitude': 85.3240},
+            extra_http_headers={"Accept-Language": "ne-NP,ne;q=0.9,en-US;q=0.8"}
         )
         page = context.new_page()
         
