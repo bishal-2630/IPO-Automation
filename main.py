@@ -1581,6 +1581,7 @@ def run_status_check():
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
+        headless = os.getenv("HEADLESS", "true").lower() == "true"
         # Launch with official Chrome channel for ultimate stealth
         try:
             browser = p.chromium.launch(
