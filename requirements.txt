@@ -12,6 +12,7 @@ psycopg2-binary
 cryptography
 whitenoise
 playwright
+numpy<2.0.0
 easyocr
 opencv-python-headless
 requests

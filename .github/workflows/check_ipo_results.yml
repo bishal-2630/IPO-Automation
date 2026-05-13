@@ -20,15 +20,21 @@ jobs:
 
       - name: Optimized Installation
         run: |
-          python -m pip install --upgrade pip
+          python3 -m pip install --upgrade pip setuptools wheel
+          echo "--- Disk Space ---"
+          df -h
           echo "--- Installing Heavy Deps (CPU versions) ---"
-          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          echo "--- Installing Project Deps ---"
-          python -m pip install -r requirements.txt
+          python3 -m pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          echo "--- Installing EasyOCR and OpenCV ---"
+          python3 -m pip install --no-cache-dir easyocr opencv-python-headless
+          echo "--- Installing Other Deps ---"
+          python3 -m pip install --no-cache-dir -r requirements.txt
           echo "--- Playwright Setup ---"
           npx playwright install --with-deps chromium
-          echo "--- Verifying easyocr ---"
-          python -m pip list | grep easyocr
+          echo "--- Debug Info ---"
+          python3 --version
+          python3 -m pip list
+          python3 -c "import easyocr; print('EasyOCR Import Success')"
 
       - name: Run IPO Result Check
         env:
@@ -36,4 +42,4 @@ jobs:
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
           RUN_MODE: "check_status"
           HEADLESS: "true"
-        run: python main.py
+        run: python3 main.py
