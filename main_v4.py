@@ -1313,16 +1313,7 @@ def run_status_check():
             print("  Page loaded. Waiting for Angular to initialize...")
             page.wait_for_timeout(6000)
             
-            # Fetch companies that were successfully applied for from the DB
-            print("Fetching applied companies from database...")
-            applied_companies = get_applied_companies()
-            
-            if not applied_companies:
-                print("No successful applications found in database to check.")
-                return
-
-            # Wait for the dropdown to be visible ONCE before starting the loop
-            # ng-select is rendered by Angular, so we try multiple selectors
+            # Wait for the dropdown to be visible
             try:
                 print("  Waiting for CDSC portal to be ready...")
                 page.wait_for_selector(
@@ -1332,7 +1323,6 @@ def run_status_check():
                 print("  ✅ Portal ready.")
             except Exception as e:
                 print(f"  ❌ Portal took too long to load: {e}")
-                # Save page source and screenshot for debugging
                 os.makedirs("screenshots", exist_ok=True)
                 page.screenshot(path="screenshots/portal_load_fail.png")
                 with open("screenshots/portal_page_source.html", "w") as f:
@@ -1340,126 +1330,150 @@ def run_status_check():
                 print("  [Debug] Screenshot and page source saved to screenshots/")
                 return
 
-            for target_company in applied_companies:
-                print(f"\n--- Checking Results for: {target_company} ---")
+            # ── STEP 1: Read the first company from the CDSC dropdown ──────────
+            print("\n  Opening dropdown to read latest company with results...")
+            page.dispatch_event("ng-select", "click")
+            page.wait_for_timeout(1500)
+
+            first_company = page.evaluate("""
+                () => {
+                    const opt = document.querySelector('.ng-option');
+                    return opt ? opt.innerText.trim() : null;
+                }
+            """)
+
+            if not first_company:
+                print("  ❌ Could not read company list from dropdown. Exiting.")
+                return
+
+            print(f"  📋 Latest company with results: {first_company}")
+
+            # ── STEP 2: Check if we applied for this company ───────────────────
+            applied_companies = get_applied_companies()
+            # Normalize: strip trailing punctuation for comparison
+            applied_normalized = [c.strip().rstrip('.').lower() for c in applied_companies]
+            first_company_norm = first_company.strip().rstrip('.').lower()
+
+            is_applied = any(
+                first_company_norm in ac or ac in first_company_norm
+                for ac in applied_normalized
+            )
+
+            if not is_applied:
+                print(f"  ⏭️  '{first_company}' — Not in our applied list. Nothing to check.")
+                print(f"  Applied companies in DB: {applied_companies}")
+                return
+
+            print(f"  ✅ Match found! '{first_company}' was applied for. Proceeding with result check...")
+
+            # ── STEP 3: Select the company in the dropdown ─────────────────────
+            # Press Escape first to close the open dropdown, then reopen and select
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+            page.dispatch_event("ng-select", "click")
+            page.wait_for_timeout(500)
+            page.type("ng-select input", first_company, delay=50)
+            page.wait_for_timeout(1000)
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(1000)
+
+            # Verify BOID form appeared
+            try:
+                page.wait_for_selector("input#boid, input[name='boid']", timeout=8000)
+                print("  ✅ BOID form visible. Starting account checks...")
+            except:
+                print(f"  ❌ BOID form did not appear after selecting '{first_company}'. Results may not be published yet.")
+                return
+
+            # Now check for each account for this company
+            for account in accounts:
+                username = account.get('MEROSHARE_USER')
+                boid = account.get('BOID')
                 
-                try:
-                    # Dropdown should already be visible now
-                    
-                    print(f"  Searching for '{target_company}'...")
-                    page.dispatch_event("ng-select", "click")
-                    page.wait_for_timeout(500)
-                    
-                    # Type the company name into the search input of ng-select
-                    # Angular ng-select usually has an input inside it
-                    page.type("ng-select input", target_company, delay=50)
-                    page.wait_for_timeout(1000)
-                    
-                    # Press Enter to select the filtered result
-                    page.keyboard.press("Enter")
-                    page.wait_for_timeout(1000)
-                    
-                    # Verify selection
-                    selected_text = page.inner_text("ng-select").strip()
-                    if target_company.lower() not in selected_text.lower():
-                        print(f"  ⚠️ Warning: Could not confirm selection of {target_company}. Selected: {selected_text}")
-                        # Continue anyway as sometimes the text match is partial
-                except Exception as e:
-                    print(f"  ❌ Error selecting {target_company}: {e}")
+                if not boid:
+                    print(f"[{username}] Skipping: No BOID.")
                     continue
 
-                # Now check for each account for THIS company
-                for account in accounts:
-                    username = account.get('MEROSHARE_USER')
-                    boid = account.get('BOID')
-                    
-                    if not boid:
-                        print(f"[{username}] Skipping: No BOID.")
-                        continue
-
-                    # Try to solve and submit
-                    success_found = False
-                    for attempt in range(5): # Outer loop for entire form retry
-                        try:
-                            # 1. Fill BOID
-                            page.fill("input#boid, input[name='boid']", boid)
+                # Try to solve and submit
+                success_found = False
+                for attempt in range(5):
+                    try:
+                        # 1. Fill BOID
+                        page.fill("input#boid, input[name='boid']", boid)
+                        
+                        # 2. Solve Captcha
+                        captcha_code = solve_captcha(page, reader)
+                        if not captcha_code:
+                            print(f"  [{username}] Could not solve captcha. Skipping account.")
+                            break
                             
-                            # 2. Solve Captcha
-                            captcha_code = solve_captcha(page, reader)
-                            if not captcha_code:
-                                print(f"  [{username}] Could not solve captcha. Skipping account.")
-                                break
-                                
-                            page.fill("input#captcha, input[name='userCaptcha']", captcha_code)
-                            
-                            # 3. Submit
-                            page.click("button[type='submit'], .btn-submit")
-                            page.wait_for_timeout(3000)
-                            
-                            # 4. Check for result or error
-                            res_info = page.evaluate("""
-                                () => {
-                                    const bodyText = document.body.innerText.toLowerCase();
-                                    if (bodyText.includes("congratulations") || bodyText.includes("allotted")) {
-                                        const msg = document.querySelector('.text-success, h3, p')?.innerText || "Allotted";
-                                        return "Allotted|" + msg;
-                                    }
-                                    if (bodyText.includes("not allotted") || bodyText.includes("sorry")) {
-                                        return "Not Allotted|Sorry, you are not allotted for this IPO.";
-                                    }
-                                    if (bodyText.includes("invalid captcha")) {
-                                        return "RETRY_CAPTCHA|Invalid Captcha";
-                                    }
-                                    return "Unknown|No result detected";
+                        page.fill("input#captcha, input[name='userCaptcha']", captcha_code)
+                        
+                        # 3. Submit
+                        page.click("button[type='submit'], .btn-submit")
+                        page.wait_for_timeout(3000)
+                        
+                        # 4. Check result
+                        res_info = page.evaluate("""
+                            () => {
+                                const bodyText = document.body.innerText.toLowerCase();
+                                if (bodyText.includes("congratulations") || bodyText.includes("allotted")) {
+                                    const msg = document.querySelector('.text-success, h3, p')?.innerText || "Allotted";
+                                    return "Allotted|" + msg;
                                 }
-                            """)
+                                if (bodyText.includes("not allotted") || bodyText.includes("sorry")) {
+                                    return "Not Allotted|Sorry, you are not allotted for this IPO.";
+                                }
+                                if (bodyText.includes("invalid captcha")) {
+                                    return "RETRY_CAPTCHA|Invalid Captcha";
+                                }
+                                return "Unknown|No result detected";
+                            }
+                        """)
+                        
+                        if res_info.startswith("RETRY_CAPTCHA"):
+                            print(f"  [{username}] AI misread captcha. Retrying...")
+                            page.click(".fa-refresh, .refresh-captcha")
+                            page.wait_for_timeout(1000)
+                            continue
+                        
+                        status_category, feedback = res_info.split("|", 1)
+                        print(f"[{username}] Result for {first_company}: {status_category} - {feedback}")
+                        
+                        if status_category != "Unknown":
+                            send_push_notification(account.get('TOKENS'), username, f"{first_company}: {feedback}")
+                            if os.getenv("DATABASE_URL"):
+                                try:
+                                    import datetime
+                                    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+                                    cur = conn.cursor()
+                                    cur.execute("""
+                                        INSERT INTO automation_applicationlog
+                                            (account_id, company_name, status, remark, timestamp, is_read)
+                                        VALUES (%s, %s, %s, %s, %s, %s)
+                                    """, (account.get('ID'), first_company, status_category, feedback,
+                                          datetime.datetime.now(datetime.timezone.utc), (status_category == "Allotted")))
+                                    conn.commit()
+                                    cur.close()
+                                    conn.close()
+                                except Exception as e:
+                                    print(f"  [DB] Failed to save result: {e}")
                             
-                            if res_info.startswith("RETRY_CAPTCHA"):
-                                print(f"  [{username}] AI misread captcha. Retrying...")
-                                # Clear fields and refresh captcha if needed
-                                page.click(".fa-refresh, .refresh-captcha")
-                                page.wait_for_timeout(1000)
-                                continue
-                            
-                            status_category, feedback = res_info.split("|", 1)
-                            print(f"[{username}] Result for {target_company}: {status_category} - {feedback}")
-                            
-                            if status_category != "Unknown":
-                                send_push_notification(account.get('TOKENS'), username, f"{target_company}: {feedback}")
-                                # Save to DB
-                                if os.getenv("DATABASE_URL"):
-                                    try:
-                                        import datetime
-                                        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-                                        cur = conn.cursor()
-                                        cur.execute("""
-                                            INSERT INTO automation_applicationlog
-                                                (account_id, company_name, status, remark, timestamp, is_read)
-                                            VALUES (%s, %s, %s, %s, %s, %s)
-                                        """, (account.get('ID'), target_company, status_category, feedback,
-                                              datetime.datetime.now(datetime.timezone.utc), (status_category == "Allotted")))
-                                        conn.commit()
-                                        cur.close()
-                                        conn.close()
-                                    except Exception as e:
-                                        print(f"  [DB] Failed to save result: {e}")
-                                
-                                success_found = True
-                                # Reset for next account
-                                page.click("button:has-text('Reset'), .btn-reset")
-                                page.wait_for_timeout(1000)
-                                break
-                            
-                        except Exception as e:
-                            print(f"  [{username}] Error: {e}")
-                            page.reload()
-                            page.wait_for_timeout(3000)
-                            
-                    if not success_found:
-                         print(f"  [{username}] Could not verify result for {target_company} after multiple attempts.")
-                    
-                    # Small delay between accounts
-                    page.wait_for_timeout(1000)
+                            success_found = True
+                            page.click("button:has-text('Reset'), .btn-reset")
+                            page.wait_for_timeout(1000)
+                            break
+                        
+                    except Exception as e:
+                        print(f"  [{username}] Error: {e}")
+                        page.reload()
+                        page.wait_for_timeout(3000)
+                        
+                if not success_found:
+                    print(f"  [{username}] Could not verify result for {first_company} after multiple attempts.")
+                
+                page.wait_for_timeout(1000)
+
 
         except Exception as e:
             print(f"Error during status check: {e}")
