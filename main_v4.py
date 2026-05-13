@@ -1328,9 +1328,9 @@ def run_status_check():
         try:
             url = "https://iporesult.cdsc.com.np/"
             print(f"Navigating to {url}...")
-            page.goto(url, timeout=60000, wait_until='networkidle')
+            page.goto(url, timeout=60000, wait_until='domcontentloaded')
             print("  Page loaded. Waiting for Angular to initialize...")
-            page.wait_for_timeout(8000)
+            page.wait_for_timeout(6000)
             
             # Fetch companies that were successfully applied for from the DB
             print("Fetching applied companies from database...")
