@@ -1411,21 +1411,33 @@ def run_status_check():
 
             # ── STEP 2: Check if we applied for this company ───────────────────
             applied_companies = get_applied_companies()
-            # Normalize: strip trailing punctuation for comparison
-            applied_normalized = [c.strip().rstrip('.').lower() for c in applied_companies]
-            first_company_norm = first_company.strip().rstrip('.').lower()
+            
+            def normalize(name):
+                # 1. Remove everything in parentheses: "(For General Public)" -> ""
+                name = re.sub(r'\(.*?\)', '', name)
+                # 2. Standardize Ltd/Limited
+                name = name.lower().replace('limited', 'ltd').replace('ltd.', 'ltd')
+                # 3. Strip punctuation and whitespace
+                return name.strip().rstrip('.').lower()
 
-            is_applied = any(
-                first_company_norm in ac or ac in first_company_norm
-                for ac in applied_normalized
-            )
+            applied_normalized = [normalize(c) for c in applied_companies]
+            first_company_norm = normalize(first_company)
 
+            print(f"  [Debug] Normalized target: '{first_company_norm}'")
+            
+            is_applied = False
+            matched_db_name = None
+            for i, ac in enumerate(applied_normalized):
+                if first_company_norm in ac or ac in first_company_norm:
+                    is_applied = True
+                    matched_db_name = applied_companies[i]
+                    break
+            
             if not is_applied:
                 print(f"  ⏭️  '{first_company}' — Not in our applied list. Nothing to check.")
-                print(f"  Applied companies in DB: {applied_companies}")
                 return
-
-            print(f"  ✅ Match found! '{first_company}' was applied for. Proceeding with result check...")
+            
+            print(f"  🎯 MATCH FOUND: '{first_company}' matches DB entry '{matched_db_name}'. Proceeding to result check...")
 
             # ── STEP 3: Select the company in the dropdown ─────────────────────
             page.keyboard.press("Escape")
