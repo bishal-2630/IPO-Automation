@@ -1570,7 +1570,7 @@ def solve_captcha(page, reader, max_retries=5):
     return None
 
 def run_status_check():
-    print("--- IPO Result Check Version: 2026-05-13 V12 (Aggressive Captcha) ---")
+    print("--- IPO Result Check Version: 2026-05-13 V13 (Advanced Scanning) ---")
     """
     Official CDSC Portal Result Check (With AI Captcha Solving).
     """
