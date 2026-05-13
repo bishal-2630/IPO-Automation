@@ -1,0 +1,49 @@
+# FINAL FIX - V6
+name: IPO RESULT FINAL FIX
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-results:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Super Installation Block
+        run: |
+          set -e
+          echo "--- STARTING SUPER INSTALLATION ---"
+          python -m pip install --upgrade pip setuptools wheel
+          
+          echo "--- INSTALLING TORCH CPU ---"
+          pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          
+          echo "--- INSTALLING EASYOCR ---"
+          pip install --no-cache-dir easyocr opencv-python-headless
+          
+          echo "--- INSTALLING PROJECT DEPS ---"
+          pip install --no-cache-dir playwright python-dotenv psycopg2-binary firebase-admin cryptography requests
+          
+          echo "--- INSTALLING REQUIREMENTS ---"
+          pip install --no-cache-dir -r requirements.txt
+          
+          echo "--- PLAYWRIGHT SETUP ---"
+          playwright install chromium
+          
+          echo "--- VERIFICATION ---"
+          python -c "import easyocr; print('SUCCESS: easyocr is ready')"
+
+      - name: Run Main Script
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
+          RUN_MODE: "check_status"
+          HEADLESS: "true"
+        run: python main.py
