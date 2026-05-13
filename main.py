@@ -554,30 +554,28 @@ def login(page, username, password, dp_name):
                 }}
 
                 if (bestMatch) {{
-                    const selectedName = bestMatch.innerText;
-                    bestMatch.click();
-                    return "SUCCESS:" + selectedName;
+                    return bestMatch.innerText;
                 }}
-                return false;
+                return null;
             }}
         """, dp_name)
         
-        if success and success.startswith("SUCCESS:"):
-            selected_name = success.split("SUCCESS:")[1]
-            print(f"  [DP] Selected: {selected_name}")
+        if success:
+            print(f"  [DP] Found match: {success}. Clicking...")
+            # Click the option natively using Playwright
+            page.locator(".select2-results__option", has_text=success).first.click()
             
-            # VERIFICATION: Read what is actually displayed in the dropdown container
-            page.wait_for_timeout(1000)
+            # VERIFICATION: Wait a bit longer and check the rendered text
+            page.wait_for_timeout(1500)
             actual_display = page.inner_text(".select2-selection__rendered, .select2-selection").strip()
-            if dp_name.lower().split()[0] not in actual_display.lower():
-                print(f"  ⚠️ VERIFICATION FAILED: Page shows '{actual_display}', but we wanted '{dp_name}'. Retrying search...")
-                # Try typing the FULL name this time
-                search_box = page.locator(".select2-search__field, .select2-search input").first
-                page.dispatch_event(".ng-select-container, .select2-selection", "click")
-                search_box.fill(dp_name)
-                page.wait_for_timeout(2000)
+            
+            if not actual_display or "select" in actual_display.lower():
+                print(f"  ⚠️ VERIFICATION FAILED: UI still shows '{actual_display}'. Retrying with keyboard...")
                 page.keyboard.press("Enter")
                 page.wait_for_timeout(1000)
+                actual_display = page.inner_text(".select2-selection__rendered").strip()
+            
+            print(f"  [DP] Final Selection: {actual_display}")
         
         elif success == "NO_RESULTS":
             print(f"  ❌ No results found for DP: {dp_name}. Clearing overlay...")
