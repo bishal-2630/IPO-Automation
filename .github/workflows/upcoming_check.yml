@@ -1,0 +1,30 @@
+name: Upcoming IPO Calendar Sync
+
+on:
+  schedule:
+    - cron: '0 4 * * *' # Run at 9:45 AM NST (4:00 AM UTC) daily
+  workflow_dispatch:
+
+jobs:
+  sync-calendar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: user-part-1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install playwright psycopg2-binary
+          playwright install chromium
+
+      - name: Run Upcoming Scraper
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scraper_upcoming.py
