@@ -120,10 +120,15 @@ def run_automation():
                 ipo_name = "Auto-Check"
                 page = context.new_page()
                 try:
-                    # 2. MeroShare IPO Application
+                    decrypted_pass = decrypt(acc['meroshare_pass'])
+                    if decrypted_pass.startswith('gAAAAA'):
+                        print(f"  ⚠️  WARNING: Password for {acc['meroshare_user']} still looks ENCRYPTED. Check your ENCRYPTION_KEY.")
+                    else:
+                        print(f"  🔑 Password Decrypted. Length: {len(decrypted_pass)} chars.")
+
                     account_data = {
                         'MEROSHARE_USER': acc['meroshare_user'],
-                        'MEROSHARE_PASS': decrypt(acc['meroshare_pass']),
+                        'MEROSHARE_PASS': decrypted_pass,
                         'DP_NAME': acc['dp_name'],
                         'CRN': acc['crn'],
                         'TPIN': acc['tpin'],
