@@ -10,6 +10,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Git Debug Info
+        run: |
+          git log -n 1 --oneline
+          ls -l main.py
+          grep -n "V4" main.py || echo "V4 NOT FOUND IN main.py"
 
       - name: Set up Python
         uses: actions/setup-python@v4
