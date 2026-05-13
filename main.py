@@ -1355,16 +1355,21 @@ def run_status_check():
 
             # ── STEP 1: Read the first company from the CDSC dropdown ──────────
             print("\n  Opening dropdown to read latest company with results...")
-            # Target the inner container (the actual clickable part of ng-select)
-            page.dispatch_event(".ng-select-container", "click")
-            page.wait_for_timeout(2500)
+            
+            # Click the container and wait for the panel
+            try:
+                page.locator(".ng-select-container").first.click()
+                page.wait_for_selector(".ng-dropdown-panel", timeout=5000)
+            except:
+                print("  ⚠️ Native click failed. Trying dispatch event...")
+                page.dispatch_event(".ng-select-container", "click")
+                page.wait_for_timeout(2000)
 
             first_company = page.evaluate("""
                 () => {
-                    const options = Array.from(document.querySelectorAll('.ng-option, .ng-option-label, [role="option"]'));
+                    const options = Array.from(document.querySelectorAll('.ng-option, .ng-option-label'));
                     for (const opt of options) {
                         const text = opt.innerText.trim();
-                        // Ignore placeholders
                         if (text && text.length > 5 && 
                             !text.toLowerCase().includes('select') && 
                             !text.toLowerCase().includes('found')) {
@@ -1376,15 +1381,11 @@ def run_status_check():
             """)
 
             if not first_company:
-                print("  ⚠️ Could not read company list from dropdown. Retrying with panel wait...")
-                page.dispatch_event(".ng-select-container", "click")
-                try:
-                    page.wait_for_selector(".ng-dropdown-panel", timeout=5000)
-                    first_company = page.evaluate("() => document.querySelector('.ng-dropdown-panel .ng-option')?.innerText?.trim()")
+                print(f"  ❌ Failed to read company list. Saving debug screenshot...")
+                try: 
+                    os.makedirs("screenshots", exist_ok=True)
+                    page.screenshot(path="screenshots/debug_cdsc_dropdown_fail.png")
                 except: pass
-
-            if not first_company or "found" in first_company.lower() or "select" in first_company.lower():
-                print(f"  ❌ Final attempt failed to read company list (Got: '{first_company}'). Exiting.")
                 return
 
             print(f"  📋 Latest company with results: {first_company}")
