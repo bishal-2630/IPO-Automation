@@ -1361,17 +1361,14 @@ def run_status_check():
 
             first_company = page.evaluate("""
                 () => {
-                    // Try multiple selectors in order of specificity
-                    const selectors = [
-                        '.ng-dropdown-panel .ng-option:first-child',
-                        '.ng-option:first-child',
-                        '[role="option"]:first-child',
-                        '.ng-option-label'
-                    ];
-                    for (const sel of selectors) {
-                        const el = document.querySelector(sel);
-                        if (el && el.innerText && el.innerText.trim().length > 2) {
-                            return el.innerText.trim();
+                    const options = Array.from(document.querySelectorAll('.ng-option, .ng-option-label, [role="option"]'));
+                    for (const opt of options) {
+                        const text = opt.innerText.trim();
+                        // Ignore placeholders
+                        if (text && text.length > 5 && 
+                            !text.toLowerCase().includes('select') && 
+                            !text.toLowerCase().includes('found')) {
+                            return text;
                         }
                     }
                     return null;
@@ -1379,13 +1376,15 @@ def run_status_check():
             """)
 
             if not first_company:
-                print("  ⚠️ Could not read company list from dropdown. Retrying with a direct click...")
-                page.click(".ng-select-container", force=True)
-                page.wait_for_timeout(2000)
-                first_company = page.evaluate("() => document.querySelector('.ng-option')?.innerText?.trim()")
+                print("  ⚠️ Could not read company list from dropdown. Retrying with panel wait...")
+                page.dispatch_event(".ng-select-container", "click")
+                try:
+                    page.wait_for_selector(".ng-dropdown-panel", timeout=5000)
+                    first_company = page.evaluate("() => document.querySelector('.ng-dropdown-panel .ng-option')?.innerText?.trim()")
+                except: pass
 
-            if not first_company:
-                print("  ❌ Final attempt failed to read company list. Exiting.")
+            if not first_company or "found" in first_company.lower() or "select" in first_company.lower():
+                print(f"  ❌ Final attempt failed to read company list (Got: '{first_company}'). Exiting.")
                 return
 
             print(f"  📋 Latest company with results: {first_company}")
