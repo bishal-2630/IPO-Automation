@@ -19,6 +19,14 @@ jobs:
           ls -l main_v4.py
           grep -n "V4" main_v4.py || echo "V4 NOT FOUND IN main_v4.py"
 
+      - name: Cache EasyOCR Models
+        uses: actions/cache@v3
+        with:
+          path: ~/.EasyOCR
+          key: ${{ runner.os }}-easyocr-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-easyocr-
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
