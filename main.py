@@ -1482,10 +1482,16 @@ def solve_captcha(page, reader, max_retries=5):
                 try:
                     all_imgs = page.query_selector_all("img")
                     if all_imgs:
-                        print(f"  [Debug] Found {len(all_imgs)} images on page:")
-                        for i, img in enumerate(all_imgs[:5]): # Log first 5
+                        print(f"  [Debug] Found {len(all_imgs)} images. Scanning for captcha...")
+                        for img in all_imgs:
+                            box = img.bounding_box()
                             src = page.evaluate("(el) => el.src", img)
-                            print(f"    - Img {i}: {src[:100]}...")
+                            # CDSC captchas are usually around 100-200px wide
+                            if box and 100 <= box['width'] <= 250 and box['height'] <= 100:
+                                if "captcha" in src.lower() or "base64" in src.lower() or "/captcha" in src:
+                                    print(f"  🎯 Found captcha image via dimensions: {src[:50]}...")
+                                    captcha_img = img
+                                    break
                 except: pass
                 
                 # Save screenshot for debug
