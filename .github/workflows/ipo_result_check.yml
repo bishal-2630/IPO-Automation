@@ -16,7 +16,7 @@ jobs:
         run: |
           git log -n 1 --oneline
           ls -l ipo_result.py
-          grep -n "V4" ipo_result.py || echo "V4 NOT FOUND IN ipo_result.py"
+          grep -n "V18" ipo_result.py || echo "V18 NOT FOUND"
 
       - name: Cache EasyOCR Models
         uses: actions/cache@v3
@@ -31,33 +31,43 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Super Installation Block
+      - name: Install Google Chrome (Real browser for WAF bypass)
+        run: |
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -q
+          sudo apt-get install -y google-chrome-stable
+          google-chrome --version
+
+      - name: Install Python Dependencies
         run: |
           set -e
-          echo "--- STARTING SUPER INSTALLATION ---"
           python -m pip install --upgrade pip setuptools wheel
-          
+
           echo "--- INSTALLING TORCH CPU ---"
           pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          
+
           echo "--- INSTALLING EASYOCR ---"
           pip install --no-cache-dir easyocr opencv-python-headless
-          
+
           echo "--- INSTALLING PROJECT DEPS ---"
-          pip install --no-cache-dir playwright python-dotenv psycopg2-binary firebase-admin cryptography requests
-          
+          pip install --no-cache-dir playwright playwright-stealth python-dotenv psycopg2-binary firebase-admin cryptography requests
+
           echo "--- INSTALLING REQUIREMENTS ---"
           pip install --no-cache-dir -r requirements.txt
-          
-          echo "--- PLAYWRIGHT SETUP ---"
-          playwright install chromium
-          
-          echo "--- VERIFICATION ---"
-          python -c "import easyocr; print('SUCCESS: easyocr is ready')"
 
-      - name: Run Main Script
+          echo "--- PLAYWRIGHT: Register Chrome channel ---"
+          playwright install chrome
+          playwright install-deps chrome
+
+          echo "--- VERIFICATION ---"
+          python -c "import easyocr; print('SUCCESS: easyocr ready')"
+          python -c "from playwright_stealth import stealth_sync; print('SUCCESS: playwright-stealth ready')"
+
+      - name: Run IPO Result Check
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
           RUN_MODE: "check_status"
           HEADLESS: "true"

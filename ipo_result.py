@@ -187,13 +187,13 @@ def run_status_check():
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
+            channel='chrome',  # Use REAL Chrome - bypasses TLS fingerprint WAF detection
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-infobars',
-                '--window-size=1280,800',
                 '--disable-dev-shm-usage',
+                '--window-size=1280,800',
             ]
         )
         context = browser.new_context(
