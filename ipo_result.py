@@ -148,48 +148,50 @@ def get_unchecked_accounts_for_company(company_name):
     except: return accounts
 
 def solve_captcha(page, reader, max_retries=3):
+    import io
     for attempt in range(max_retries):
         try:
-            # More specific selector for CDSC captcha
             captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
             captcha_img.wait_for(state="visible", timeout=20000)
             
-            # Wait for actual captcha to load (avoid blank placeholder)
-            real_loaded = False
-            for _ in range(15):
-                src = captcha_img.get_attribute("src") or ""
-                if "blankCaptcha" not in src and "assets" not in src and len(src) > 50: # Base64 images are long
-                    real_loaded = True
+            # Wait for real captcha — keep screenshotting until image is not blank/white
+            captcha_bytes = None
+            for wait_attempt in range(15):
+                raw = captcha_img.screenshot()
+                img_check = Image.open(io.BytesIO(raw)).convert('L')
+                pixels = list(img_check.getdata())
+                # A blank/white image has >95% pixels near 255
+                white_ratio = sum(1 for p in pixels if p > 240) / len(pixels)
+                if white_ratio < 0.9:  # Real image has content
+                    captcha_bytes = raw
                     break
-                page.wait_for_timeout(1000)
-            
-            if not real_loaded:
-                print(f"      [Captcha] Placeholder still present. Refreshing...")
+                print(f"      [Captcha] Blank image detected (white_ratio={white_ratio:.2f}), waiting...")
                 captcha_img.click(force=True)
                 page.wait_for_timeout(2000)
+            
+            if not captcha_bytes:
+                print(f"      [Captcha] Could not load real captcha image. Skipping attempt {attempt+1}.")
                 continue
 
-            captcha_bytes = captcha_img.screenshot()
-            
             # Save for debugging
             os.makedirs("screenshots", exist_ok=True)
             with open(f"screenshots/captcha_attempt_{attempt}.png", "wb") as f:
                 f.write(captcha_bytes)
             
-            import io
             img = Image.open(io.BytesIO(captcha_bytes)).convert('L')
             
             # Upscale image for better OCR accuracy
             w, h = img.size
-            img = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
+            img3x = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
             
             # Enhancement suite
             enhancements = [
-                img, # Upscaled grayscale
-                ImageEnhance.Contrast(img).enhance(2.5), # High contrast
-                img.point(lambda p: p > 140 and 255), # Sharp threshold
-                ImageOps.invert(img.point(lambda p: p > 128 and 255)), # Inverted binary
-                ImageEnhance.Sharpness(img).enhance(4.0) # Very sharp
+                img,                                          # Original
+                img3x,                                        # 3x upscaled
+                ImageEnhance.Contrast(img3x).enhance(2.5),   # High contrast
+                img3x.point(lambda p: p > 128 and 255),      # Binary threshold
+                ImageOps.invert(img3x.point(lambda p: p > 128 and 255)),  # Inverted binary
+                ImageEnhance.Sharpness(img3x).enhance(4.0),  # Very sharp
             ]
             
             possible_texts = []
@@ -208,8 +210,8 @@ def solve_captcha(page, reader, max_retries=3):
                 print(f"      [Captcha] Solved: {final_text}")
                 return final_text
             
-            print(f"      [Captcha] Attempt {attempt+1} failed to read. Refreshing...")
-            captcha_img.click(force=True) 
+            print(f"      [Captcha] Attempt {attempt+1}: no 5-digit code found. Refreshing...")
+            captcha_img.click(force=True)
             page.wait_for_timeout(2500)
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -386,18 +388,24 @@ def run_status_check():
                         page.keyboard.press("Backspace")
                         page.keyboard.type(boid, delay=random.randint(80, 150))
                         
-                             # Try solving captcha (up to 3 times per account check)
+                        # Try solving captcha (up to 3 times per account check)
                         print(f"      Solving Captcha...")
                         for cap_attempt in range(3):
                             cap = solve_captcha(page, reader)
                             if not cap: continue
                             
-                            smart_click("#captcha")
-                            page.keyboard.press("Control+A")
-                            page.keyboard.press("Backspace")
-                            page.keyboard.type(cap, delay=120)
+                            # Use JS fill to bypass WAF iframe interception on input fields
+                            page.evaluate(f"""() => {{
+                                const el = document.querySelector('#captcha');
+                                if (el) {{
+                                    el.value = '{cap}';
+                                    el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                                    el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                                }}
+                            }}""")
+                            page.wait_for_timeout(300)
                             
-                            # Coordination-based click to bypass WAF
+                            # Submit via smart_click which uses coordinate-based mouse click
                             smart_click("button:has-text('View Result')")
                                 
                             page.wait_for_timeout(2500)
