@@ -233,99 +233,79 @@ def run_status_check():
     import easyocr
     reader = easyocr.Reader(['en'], gpu=False)
 
-    # --- Proxy Loading ---
-    proxies = []
-    if os.environ.get("PROXY_SERVER"):
-        proxies.append(os.environ.get("PROXY_SERVER"))
-    if os.path.exists("proxy.txt"):
-        with open("proxy.txt") as f:
-            proxies.extend([line.strip() for line in f.readlines() if line.strip()])
-    
-    # If no proxies found, try direct connection once
-    if not proxies:
-        proxies = [None]
+    with sync_playwright() as p:
+        launch_kwargs = {
+            "headless": os.environ.get("HEADLESS", "true").lower() != "false",
+            "channel": "chrome",
+            "ignore_default_args": ["--enable-automation"],
+            "args": [
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--window-size=1366,768',
+            ]
+        }
 
-    for proxy_idx, proxy in enumerate(proxies):
-        print(f"\n--- Attempt {proxy_idx + 1} with Proxy: {proxy or 'DIRECT'} ---")
-        
-        with sync_playwright() as p:
-            launch_kwargs = {
-                "headless": os.environ.get("HEADLESS", "true").lower() != "false",
-                "channel": "chrome",
-                "ignore_default_args": ["--enable-automation"],
-                "args": [
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--window-size=1366,768',
-                ]
-            }
-            if proxy:
-                launch_kwargs["proxy"] = {"server": f"http://{proxy}"}
-
+        try:
+            browser = p.chromium.launch(**launch_kwargs)
+            context = browser.new_context(
+                viewport={"width": 1366, "height": 768},
+                locale="en-US",
+                timezone_id="Asia/Kathmandu",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
+                    "Upgrade-Insecure-Requests": "1"
+                }
+            )
+            page = context.new_page()
+            if HAS_STEALTH and stealth_sync:
+                stealth_sync(page)
+            
+            url = "https://iporesult.cdsc.com.np/"
+            
+            # 1. Warm up session
+            print("  Warming up session...")
             try:
-                browser = p.chromium.launch(**launch_kwargs)
-                context = browser.new_context(
-                    viewport={"width": 1366, "height": 768},
-                    locale="en-US",
-                    timezone_id="Asia/Kathmandu",
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                    extra_http_headers={
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                        "Sec-Fetch-Dest": "document",
-                        "Sec-Fetch-Mode": "navigate",
-                        "Sec-Fetch-Site": "none",
-                        "Sec-Fetch-User": "?1",
-                        "Upgrade-Insecure-Requests": "1"
-                    }
-                )
-                page = context.new_page()
-                if HAS_STEALTH and stealth_sync:
-                    stealth_sync(page)
-                
-                url = "https://iporesult.cdsc.com.np/"
-                
-                # 1. Warm up session
-                print("  Warming up session...")
-                try:
-                    page.goto("https://www.google.com", wait_until='domcontentloaded', timeout=15000)
-                    page.wait_for_timeout(random.randint(1000, 2000))
-                except: pass
+                page.goto("https://www.google.com", wait_until='domcontentloaded', timeout=15000)
+                page.wait_for_timeout(random.randint(1000, 2000))
+            except: pass
 
-                print(f"Navigating to {url}...")
-                page.goto(url, wait_until='domcontentloaded', timeout=45000, referer="https://www.google.com/")
-                
-                # Check for WAF rejection
-                body_text = page.inner_text("body")
-                page_title = page.title()
-                print(f"  Page Title: {page_title}")
-                
-                if "requested URL was rejected" in body_text or "Request Rejected" in body_text or "rejected" in page_title.lower():
-                    print(f"  [WAF Blocked] Proxy {proxy} was rejected. Trying next...")
-                    browser.close()
-                    continue
+            print(f"Navigating to {url}...")
+            page.goto(url, wait_until='domcontentloaded', timeout=60000, referer="https://www.google.com/")
+            
+            # Check for WAF rejection
+            body_text = page.inner_text("body")
+            page_title = page.title()
+            print(f"  Page Title: {page_title}")
+            
+            if "requested URL was rejected" in body_text or "Request Rejected" in body_text or "rejected" in page_title.lower():
+                print(f"[CRITICAL] WAF blocked the request. Title: {page_title}.")
+                # Save screenshot for debugging
+                os.makedirs("screenshots", exist_ok=True)
+                page.screenshot(path="screenshots/waf_block.png")
+                return
 
-                # Wait for Angular app to fully load
-                print("  Waiting for Angular app to load...")
-                page.wait_for_selector("ng-select, .ng-select-container", timeout=25000)
-                page.wait_for_timeout(2000)
-                
-                # IF WE REACH HERE, navigation was successful
-                # Now execute the rest of the logic
-                run_automation_logic(page, reader, unchecked_companies)
-                
-                browser.close()
-                return # SUCCESS! Exit the proxy loop
+            # Wait for Angular app to fully load
+            print("  Waiting for Angular app to load...")
+            page.wait_for_selector("ng-select, .ng-select-container", timeout=30000)
+            page.wait_for_timeout(2000)
+            
+            # Execute the automation logic
+            run_automation_logic(page, reader, unchecked_companies)
+            
+            browser.close()
 
-            except Exception as e:
-                print(f"  [Connection Error] Proxy {proxy} failed: {e}")
-                try: browser.close()
-                except: pass
-                continue # Try next proxy
-
-    print("\n[CRITICAL] All proxy attempts failed.")
+        except Exception as e:
+            print(f"Fatal Error: {e}")
+            try: browser.close()
+            except: pass
 
 def run_automation_logic(page, reader, unchecked_companies):
     # Move the actual scraping logic here (was previously in run_status_check)

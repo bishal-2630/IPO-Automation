@@ -66,17 +66,6 @@ jobs:
           python -c "import easyocr; print('SUCCESS: easyocr ready')"
           python -c "import playwright_stealth; print('SUCCESS: playwright-stealth ready:', playwright_stealth.__version__ if hasattr(playwright_stealth, '__version__') else 'unknown')"
 
-      - name: Find Working Proxy
-        run: |
-          python find_proxy.py
-          if [ -f proxy.txt ]; then
-            # Just set the first proxy as primary env var, script reads full file for rotation
-            echo "PROXY_SERVER=$(head -n 1 proxy.txt)" >> $GITHUB_ENV
-            echo "Primary proxy found: $(head -n 1 proxy.txt)"
-          else
-            echo "No proxy found. Will attempt direct connection."
-          fi
-
       - name: Run IPO Result Check
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
