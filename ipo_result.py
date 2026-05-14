@@ -9,6 +9,43 @@ import secrets
 import re
 import datetime
 import psycopg2
+
+
+def save_result_to_db(account, company_name, status, remark):
+    """
+    Saves IPO result to automation_applicationlog.
+    """
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        return
+    
+    try:
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        
+        # Check for duplicates
+        cur.execute(
+            "SELECT id FROM automation_applicationlog WHERE account_id = %s AND company_name = %s AND status IN ('Allotted', 'Not Allotted')",
+            (account.get("ID"), company_name)
+        )
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return
+            
+        # Insert
+        cur.execute("""
+            INSERT INTO automation_applicationlog
+                (account_id, company_name, status, remark, timestamp, is_read)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (account.get("ID"), company_name, status, remark,
+              datetime.datetime.now(datetime.timezone.utc), (status == "Allotted")))
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"    [DB] Result saved for {company_name}")
+    except Exception as e:
+        print(f"    [DB] Error saving result: {e}")
 import logging
 from notifications import send_email_notification, send_push_notification
 import firebase_admin
@@ -1445,6 +1482,137 @@ def run_meroshare_api_result_check():
     print("\n[MeroShare API] Result check complete.")
 
 
+def run_nepsebajar_status_check():
+    """
+    Checks IPO allotment results via iporesult.nepsebajar.com.
+    High reliability as it has NO CAPTCHA.
+    """
+    print("--- NepseBajar Result Check Version: 2026-05-14 V15 ---")
+    accounts = get_accounts()
+    if not accounts:
+        print("Error: No accounts found.")
+        return
+
+    print(f"[NepseBajar] Checking results for {len(accounts)} account(s)...")
+
+    with sync_playwright() as p:
+        headless = os.getenv("HEADLESS", "true").lower() == "true"
+        browser = p.chromium.launch(headless=headless)
+        context = browser.new_context()
+        page = context.new_page()
+
+        try:
+            url = "https://iporesult.nepsebajar.com/"
+            print(f"Navigating to {url}...")
+            page.goto(url, timeout=60000)
+            
+            # Close ad overlay if present
+            try:
+                page.wait_for_selector("text=Maybe Later, .close-btn", timeout=5000)
+                page.click("text=Maybe Later, .close-btn")
+            except: pass
+
+            # 1. Get ALL companies from dropdown
+            page.wait_for_selector("#company_id", timeout=15000)
+            all_companies = page.evaluate("""
+                () => {
+                    const sel = document.querySelector('#company_id');
+                    return Array.from(sel.options)
+                        .filter(o => o.value && o.innerText.trim().length > 3)
+                        .map(o => o.innerText.trim());
+                }
+            """)
+
+            if not all_companies:
+                print("  ❌ Failed to load companies from NepseBajar.")
+                return
+
+            print(f"  📋 Found {len(all_companies)} companies with results on NepseBajar.")
+
+            # 2. Identify which ones we applied for
+            applied_companies = get_applied_companies()
+            def normalize(name):
+                name = re.sub(r'\(.*?\)', '', name)
+                return name.lower().replace('limited', 'ltd').replace('ltd.', 'ltd').strip().rstrip('.').lower()
+
+            applied_norm = [normalize(c) for c in applied_companies]
+            
+            # Map NepseBajar company names to our internal names
+            matches_to_check = []
+            for nb_name in all_companies:
+                nb_norm = normalize(nb_name)
+                for i, app_norm in enumerate(applied_norm):
+                    if nb_norm in app_norm or app_norm in nb_norm:
+                        matches_to_check.append({
+                            'nb_name': nb_name,
+                            'db_name': applied_companies[i]
+                        })
+                        break
+            
+            if not matches_to_check:
+                print(f"  [Skip] None of the {len(all_companies)} companies match your applied list.")
+                return
+
+            print(f"  [Match] Found {len(matches_to_check)} IPO results to check: {[m['nb_name'] for m in matches_to_check]}")
+
+            # 3. Check for each account
+            for account in accounts:
+                username = account.get('MEROSHARE_USER')
+                boid = account.get('BOID')
+                if not boid: continue
+
+                print(f"\n  [{username}] Checking {len(matches_to_check)} results...")
+
+                for match in matches_to_check:
+                    try:
+                        target_company = match['nb_name']
+                        db_company = match['db_name']
+                        
+                        # Select company
+                        page.select_option("#company_id", label=target_company)
+                        # Fill BOID
+                        page.fill("#demat_number", boid)
+                        # Submit
+                        page.click("button:has-text('Check Result')")
+                        
+                        # Wait for result
+                        page.wait_for_timeout(2000)
+                        
+                        result_text = page.evaluate("""
+                            () => {
+                                const body = document.body.innerText;
+                                if (body.includes("Congratulations")) {
+                                    return "Allotted|" + body.split('Congratulations')[1].split('.')[0].trim();
+                                }
+                                if (body.includes("Sorry")) {
+                                    return "Not Allotted|Sorry, not allotted.";
+                                }
+                                return "Pending|No result found yet.";
+                            }
+                        """)
+
+                        status_cat, feedback = result_text.split("|")
+                        print(f"    - {target_company}: {status_cat}")
+
+                        if status_cat != "Pending":
+                            # Save to DB and send notification
+                            save_result_to_db(account, db_company, status_cat, feedback)
+                            send_push_notification(account.get('TOKENS'), username, f"{target_company}: {status_cat} - {feedback}")
+                        
+                        # Clear for next check (refresh or navigate back)
+                        page.goto(url)
+                        page.wait_for_timeout(500)
+
+                    except Exception as e:
+                        print(f"    - Error checking {match['nb_name']}: {e}")
+                        page.goto(url)
+
+        except Exception as e:
+            print(f"Global error in NepseBajar check: {e}")
+        finally:
+            browser.close()
+
+
 def solve_captcha(page, reader, max_retries=5):
     """
     Solves the CDSC IPO Result captcha using EasyOCR.
@@ -1570,7 +1738,7 @@ def solve_captcha(page, reader, max_retries=5):
     return None
 
 def run_status_check():
-    print("--- IPO Result Check Version: 2026-05-13 V14 (Hybrid) ---")
+    print("--- IPO Result Check Version: 2026-05-14 V15 (Official Stealth) ---")
     """
     Official CDSC Portal Result Check (With AI Captcha Solving).
     """
@@ -1590,10 +1758,22 @@ def run_status_check():
         headless = os.getenv("HEADLESS", "true").lower() == "true"
         browser = p.chromium.launch(
             headless=headless,
-            args=['--no-sandbox', '--disable-setuid-sandbox']
+            args=[
+                '--no-sandbox', 
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled'
+            ]
         )
         context = browser.new_context(
-            viewport={'width': 1280, 'height': 720}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={'width': 1280, 'height': 720},
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Upgrade-Insecure-Requests": "1"
+            }
         )
         page = context.new_page()
 
@@ -1863,5 +2043,7 @@ if __name__ == "__main__":
         run_status_check()
     elif mode == "check_status_api":
         run_meroshare_api_result_check()
+    elif mode == "check_status_nepsebajar":
+        run_nepsebajar_status_check()
     else:
         run_automation()
