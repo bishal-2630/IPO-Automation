@@ -153,6 +153,14 @@ def solve_captcha(page, reader, max_retries=3):
             # More specific selector for CDSC captcha
             captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
             captcha_img.wait_for(state="visible", timeout=20000)
+            
+            # Wait for actual captcha to load (avoid blank placeholder)
+            for _ in range(10):
+                src = captcha_img.get_attribute("src") or ""
+                if "blankCaptcha" not in src and src != "":
+                    break
+                page.wait_for_timeout(500)
+            
             captcha_bytes = captcha_img.screenshot()
             
             # Save for debugging if needed
@@ -189,12 +197,12 @@ def solve_captcha(page, reader, max_retries=3):
                 return final_text
             
             print(f"      [Captcha] Attempt {attempt+1} failed to read. Refreshing...")
-            # Try to find a refresh button or just click the image
+            # Use force=True to bypass WAF interception iframes
             refresh = page.locator(".fa-refresh, .refresh-captcha, button:has-text('Refresh')").first
             if refresh.is_visible():
-                refresh.click()
+                refresh.click(force=True)
             else:
-                captcha_img.click() # Clicking the image often refreshes it
+                captcha_img.click(force=True) 
             
             page.wait_for_timeout(2000)
         except Exception as e:
@@ -230,13 +238,18 @@ def run_status_check():
             ]
         )
         context = browser.new_context(
-            viewport={"width": 1280, "height": 800},
+            viewport={"width": 1366, "height": 768},
             locale="en-US",
             timezone_id="Asia/Kathmandu",
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             extra_http_headers={
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1"
             }
         )
         page = context.new_page()
@@ -342,13 +355,16 @@ def run_status_check():
                                 el.wait_for(state="visible", timeout=10000)
                                 box = el.bounding_box()
                                 if box:
-                                    # Human-like movement then click
+                                    # Human-like movement then click with force=True to bypass interception
                                     page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
                                     page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                    # Fallback click just in case
+                                    el.click(force=True, timeout=2000)
                                 else:
                                     el.click(force=True)
                             except:
-                                page.locator(selector).first.click(force=True)
+                                try: page.locator(selector).first.click(force=True)
+                                except: pass
 
                         # Selection with human-like typing
                         smart_click(".ng-select-container")
