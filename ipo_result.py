@@ -171,43 +171,95 @@ def solve_captcha(page, reader, max_retries=5):
     return None
 
 def run_status_check():
-    print("--- IPO Result Check Version: 2026-05-14 V17 (Smart Backlog) ---")
+    print("--- IPO Result Check Version: 2026-05-14 V18 (Full Stealth) ---")
     
     # 1. Get companies that need checking
     unchecked_companies = get_applied_companies()
     if not unchecked_companies:
-        print(" No unchecked IPO results found in database. Everything is up to date!")
+        print("No unchecked IPO results found in database. Everything is up to date!")
         return
+
+    print(f"Found {len(unchecked_companies)} unchecked companies: {unchecked_companies}")
 
     import easyocr
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-infobars',
+                '--window-size=1280,800',
+                '--disable-dev-shm-usage',
+            ]
         )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            locale="en-US",
+            timezone_id="Asia/Kathmandu",
+            extra_http_headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Sec-CH-UA": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "Sec-CH-UA-Mobile": "?0",
+                "Sec-CH-UA-Platform": '"Windows"',
+            }
+        )
+        # Mask automation flags
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        """)
         page = context.new_page()
         url = "https://iporesult.cdsc.com.np/"
         
         try:
             print(f"Navigating to {url}...")
-            page.goto(url, wait_until='domcontentloaded')
+            page.goto(url, wait_until='networkidle', timeout=60000)
             page.wait_for_timeout(3000)
             
+            # Check if WAF blocked us
+            body_text = page.inner_text("body")
+            if "requested URL was rejected" in body_text or "Request Rejected" in body_text:
+                print("[CRITICAL] WAF blocked the request. Try changing your IP or waiting.")
+                return
+
+            # Wait for Angular app to fully load
+            print("  Waiting for Angular app to load...")
+            page.wait_for_selector("ng-select, .ng-select-container", timeout=30000)
+            page.wait_for_timeout(2000)
+            
             # Read all companies from CDSC dropdown
-            page.wait_for_selector(".ng-select-container", timeout=30000)
             all_cdsc_companies = []
-            for _ in range(3):
-                page.locator(".ng-select-container").first.click()
-                page.wait_for_timeout(1500)
-                all_cdsc_companies = page.evaluate("() => Array.from(document.querySelectorAll('.ng-option')).map(o => o.innerText.trim()).filter(t => t.length > 5)")
-                if all_cdsc_companies: break
+            for attempt in range(3):
+                page.locator("ng-select").first.click()
+                page.wait_for_timeout(2000)
+                all_cdsc_companies = page.evaluate("""
+                    () => Array.from(document.querySelectorAll('.ng-option, ng-dropdown-panel .ng-option'))
+                         .map(o => o.innerText.trim())
+                         .filter(t => t.length > 3)
+                """)
+                if all_cdsc_companies:
+                    break
                 page.keyboard.press("Escape")
+                page.wait_for_timeout(1500)
             
             if not all_cdsc_companies:
-                print(" Could not read company list from CDSC portal.")
+                print("[Error] Could not read company list from CDSC portal.")
                 return
+
+            print(f"  Found {len(all_cdsc_companies)} companies on CDSC portal.")
 
             # Match unchecked companies with CDSC portal names
             def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').replace('ltd.', 'ltd').strip().lower()
