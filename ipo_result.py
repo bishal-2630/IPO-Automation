@@ -301,6 +301,12 @@ def run_status_check():
                     continue
 
                 print(f"\n[Company] {m['cdsc']} (Checking {len(target_accounts)} accounts)")
+                
+                # Navigate once per company to avoid triggering WAF for every single account check
+                try:
+                    page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                    page.wait_for_timeout(random.randint(2000, 4000))
+                except: pass
 
                 for account in target_accounts:
                     username = account.get('MEROSHARE_USER')
@@ -309,19 +315,34 @@ def run_status_check():
                     
                     try:
                         print(f"   [{username}] Checking...")
-                        page.goto(url, wait_until='domcontentloaded')
-                        page.wait_for_timeout(1500)
                         
+                        # Use a resilient click that handles WAF overlays
+                        def smart_click(selector):
+                            try:
+                                el = page.locator(selector).first
+                                el.wait_for(state="visible", timeout=10000)
+                                box = el.bounding_box()
+                                if box:
+                                    # Human-like movement then click
+                                    page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                    page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                else:
+                                    el.click(force=True)
+                            except:
+                                page.locator(selector).first.click(force=True)
+
                         # Selection with human-like typing
-                        page.locator(".ng-select-container").first.click()
+                        smart_click(".ng-select-container")
                         page.wait_for_timeout(500)
                         page.keyboard.type(m['cdsc'], delay=80)
                         page.wait_for_timeout(800)
                         page.keyboard.press("Enter")
                         
                         # BOID with human-like typing
-                        page.locator("input#boid").click()
-                        page.keyboard.type(boid, delay=100)
+                        smart_click("input#boid")
+                        page.keyboard.press("Control+A")
+                        page.keyboard.press("Backspace")
+                        page.keyboard.type(boid, delay=random.randint(80, 150))
                         
                         # Try solving captcha (up to 5 times per account check)
                         for cap_attempt in range(5):
