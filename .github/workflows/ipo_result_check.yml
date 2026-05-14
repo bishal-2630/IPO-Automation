@@ -70,8 +70,9 @@ jobs:
         run: |
           python find_proxy.py
           if [ -f proxy.txt ]; then
-            echo "PROXY_SERVER=$(cat proxy.txt)" >> $GITHUB_ENV
-            echo "Proxy found: $(cat proxy.txt)"
+            # Just set the first proxy as primary env var, script reads full file for rotation
+            echo "PROXY_SERVER=$(head -n 1 proxy.txt)" >> $GITHUB_ENV
+            echo "Primary proxy found: $(head -n 1 proxy.txt)"
           else
             echo "No proxy found. Will attempt direct connection."
           fi
