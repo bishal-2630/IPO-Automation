@@ -155,15 +155,23 @@ def solve_captcha(page, reader, max_retries=3):
             captcha_img.wait_for(state="visible", timeout=20000)
             
             # Wait for actual captcha to load (avoid blank placeholder)
-            for _ in range(10):
+            real_loaded = False
+            for _ in range(15):
                 src = captcha_img.get_attribute("src") or ""
-                if "blankCaptcha" not in src and src != "":
+                if "blankCaptcha" not in src and "assets" not in src and len(src) > 50: # Base64 images are long
+                    real_loaded = True
                     break
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(1000)
             
+            if not real_loaded:
+                print(f"      [Captcha] Placeholder still present. Refreshing...")
+                captcha_img.click(force=True)
+                page.wait_for_timeout(2000)
+                continue
+
             captcha_bytes = captcha_img.screenshot()
             
-            # Save for debugging if needed
+            # Save for debugging
             os.makedirs("screenshots", exist_ok=True)
             with open(f"screenshots/captcha_attempt_{attempt}.png", "wb") as f:
                 f.write(captcha_bytes)
@@ -171,13 +179,17 @@ def solve_captcha(page, reader, max_retries=3):
             import io
             img = Image.open(io.BytesIO(captcha_bytes)).convert('L')
             
+            # Upscale image for better OCR accuracy
+            w, h = img.size
+            img = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
+            
             # Enhancement suite
             enhancements = [
-                img, # Raw grayscale
-                ImageEnhance.Contrast(img).enhance(2.0), # High contrast
-                img.point(lambda p: p > 128 and 255), # Binary threshold
-                ImageOps.invert(img), # Inverted
-                ImageEnhance.Sharpness(img).enhance(3.0) # Sharp
+                img, # Upscaled grayscale
+                ImageEnhance.Contrast(img).enhance(2.5), # High contrast
+                img.point(lambda p: p > 140 and 255), # Sharp threshold
+                ImageOps.invert(img.point(lambda p: p > 128 and 255)), # Inverted binary
+                ImageEnhance.Sharpness(img).enhance(4.0) # Very sharp
             ]
             
             possible_texts = []
@@ -197,14 +209,8 @@ def solve_captcha(page, reader, max_retries=3):
                 return final_text
             
             print(f"      [Captcha] Attempt {attempt+1} failed to read. Refreshing...")
-            # Use force=True to bypass WAF interception iframes
-            refresh = page.locator(".fa-refresh, .refresh-captcha, button:has-text('Refresh')").first
-            if refresh.is_visible():
-                refresh.click(force=True)
-            else:
-                captcha_img.click(force=True) 
-            
-            page.wait_for_timeout(2000)
+            captcha_img.click(force=True) 
+            page.wait_for_timeout(2500)
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
     print("      [Captcha] Failed all attempts.")
@@ -380,24 +386,19 @@ def run_status_check():
                         page.keyboard.press("Backspace")
                         page.keyboard.type(boid, delay=random.randint(80, 150))
                         
-                        # Try solving captcha (up to 3 times per account check)
+                             # Try solving captcha (up to 3 times per account check)
                         print(f"      Solving Captcha...")
                         for cap_attempt in range(3):
                             cap = solve_captcha(page, reader)
                             if not cap: continue
                             
-                            page.locator("#captcha").click()
+                            smart_click("#captcha")
                             page.keyboard.press("Control+A")
                             page.keyboard.press("Backspace")
                             page.keyboard.type(cap, delay=120)
                             
                             # Coordination-based click to bypass WAF
-                            btn = page.locator("button:has-text('View Result')").first
-                            box = btn.bounding_box()
-                            if box:
-                                page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                            else:
-                                btn.click()
+                            smart_click("button:has-text('View Result')")
                                 
                             page.wait_for_timeout(2500)
                             
