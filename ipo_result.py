@@ -233,229 +233,247 @@ def run_status_check():
     import easyocr
     reader = easyocr.Reader(['en'], gpu=False)
 
-    with sync_playwright() as p:
-        # --- Proxy Setup ---
-        proxy = os.environ.get("PROXY_SERVER")
-        if not proxy and os.path.exists("proxy.txt"):
-            with open("proxy.txt") as f:
-                proxy = f.read().strip()
-        
-        launch_kwargs = {
-            "headless": os.environ.get("HEADLESS", "true").lower() != "false",
-            "channel": "chrome",
-            "ignore_default_args": ["--enable-automation"],
-            "args": [
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--window-size=1366,768',
-            ]
-        }
-        if proxy:
-            print(f"  [Proxy] Using proxy: {proxy}")
-            launch_kwargs["proxy"] = {"server": f"http://{proxy}"}
-        else:
-            print("  [Proxy] No proxy found — connecting directly (may be WAF blocked).")
+    # --- Proxy Loading ---
+    proxies = []
+    if os.environ.get("PROXY_SERVER"):
+        proxies.append(os.environ.get("PROXY_SERVER"))
+    if os.path.exists("proxy.txt"):
+        with open("proxy.txt") as f:
+            proxies.extend([line.strip() for line in f.readlines() if line.strip()])
+    
+    # If no proxies found, try direct connection once
+    if not proxies:
+        proxies = [None]
 
-        browser = p.chromium.launch(**launch_kwargs)
-        context = browser.new_context(
-            viewport={"width": 1366, "height": 768},
-            locale="en-US",
-            timezone_id="Asia/Kathmandu",
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            extra_http_headers={
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1"
+    for proxy_idx, proxy in enumerate(proxies):
+        print(f"\n--- Attempt {proxy_idx + 1} with Proxy: {proxy or 'DIRECT'} ---")
+        
+        with sync_playwright() as p:
+            launch_kwargs = {
+                "headless": os.environ.get("HEADLESS", "true").lower() != "false",
+                "channel": "chrome",
+                "ignore_default_args": ["--enable-automation"],
+                "args": [
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--window-size=1366,768',
+                ]
             }
-        )
-        page = context.new_page()
-        if HAS_STEALTH and stealth_sync:
-            stealth_sync(page)
-        url = "https://iporesult.cdsc.com.np/"
-        
-        try:
-            # 1. Warm up the session by visiting Google first
-            print("  Warming up session...")
+            if proxy:
+                launch_kwargs["proxy"] = {"server": f"http://{proxy}"}
+
             try:
-                page.goto("https://www.google.com", wait_until='domcontentloaded', timeout=20000)
-                page.wait_for_timeout(random.randint(2000, 4000))
-            except:
-                pass
-
-            print(f"Navigating to {url}...")
-            page.goto(url, wait_until='domcontentloaded', timeout=60000, referer="https://www.google.com/")
-            # Randomized delay to mimic human behavior
-            page.wait_for_timeout(random.randint(4000, 8000))
-            
-            # Check if WAF blocked us
-            body_text = page.inner_text("body")
-            page_title = page.title()
-            print(f"  Page Title: {page_title}")
-            
-            if "requested URL was rejected" in body_text or "Request Rejected" in body_text or "rejected" in page_title.lower():
-                print(f"[CRITICAL] WAF blocked the request. Title: {page_title}. Body length: {len(body_text)}")
-                # Save screenshot for debugging
-                os.makedirs("screenshots", exist_ok=True)
-                page.screenshot(path="screenshots/waf_block.png")
-                return
-
-            # Wait for Angular app to fully load
-            print("  Waiting for Angular app to load...")
-            page.wait_for_selector("ng-select, .ng-select-container", timeout=30000)
-            page.wait_for_timeout(2000)
-            
-            # Read all companies from CDSC dropdown
-            all_cdsc_companies = []
-            for attempt in range(3):
-                page.locator("ng-select").first.click()
-                page.wait_for_timeout(2000)
-                all_cdsc_companies = page.evaluate("""
-                    () => Array.from(document.querySelectorAll('.ng-option, ng-dropdown-panel .ng-option'))
-                         .map(o => o.innerText.trim())
-                         .filter(t => t.length > 3)
-                """)
-                if all_cdsc_companies:
-                    break
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(1500)
-            
-            if not all_cdsc_companies:
-                print("[Error] Could not read company list from CDSC portal.")
-                return
-
-            print(f"  Found {len(all_cdsc_companies)} companies on CDSC portal.")
-
-            # Match unchecked companies with CDSC portal names
-            def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').replace('ltd.', 'ltd').strip().lower()
-            matches = []
-            for c_name in all_cdsc_companies:
-                c_norm = norm(c_name)
-                for db_name in unchecked_companies:
-                    db_norm = norm(db_name)
-                    if c_norm in db_norm or db_norm in c_norm:
-                        matches.append({'cdsc': c_name, 'db': db_name})
-                        break
-            
-            if not matches:
-                print(f" Found {len(unchecked_companies)} unchecked companies in DB, but none match the current CDSC results list.")
-                return
-
-            print(f"Starting smart check for {len(matches)} matched companies...")
-
-            for m in matches:
-                # Find only accounts that haven't been checked for THIS specific company
-                target_accounts = get_unchecked_accounts_for_company(m['db'])
-                if not target_accounts:
-                    continue
-
-                print(f"\n[Company] {m['cdsc']} (Checking {len(target_accounts)} accounts)")
+                browser = p.chromium.launch(**launch_kwargs)
+                context = browser.new_context(
+                    viewport={"width": 1366, "height": 768},
+                    locale="en-US",
+                    timezone_id="Asia/Kathmandu",
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                        "Sec-Fetch-Dest": "document",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Site": "none",
+                        "Sec-Fetch-User": "?1",
+                        "Upgrade-Insecure-Requests": "1"
+                    }
+                )
+                page = context.new_page()
+                if HAS_STEALTH and stealth_sync:
+                    stealth_sync(page)
                 
-                # Navigate once per company to avoid triggering WAF for every single account check
+                url = "https://iporesult.cdsc.com.np/"
+                
+                # 1. Warm up session
+                print("  Warming up session...")
                 try:
-                    page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                    page.wait_for_timeout(random.randint(2000, 4000))
+                    page.goto("https://www.google.com", wait_until='domcontentloaded', timeout=15000)
+                    page.wait_for_timeout(random.randint(1000, 2000))
                 except: pass
 
-                for account in target_accounts:
-                    username = account.get('MEROSHARE_USER')
-                    boid = account.get('BOID')
-                    if not boid: continue
+                print(f"Navigating to {url}...")
+                page.goto(url, wait_until='domcontentloaded', timeout=45000, referer="https://www.google.com/")
+                
+                # Check for WAF rejection
+                body_text = page.inner_text("body")
+                page_title = page.title()
+                print(f"  Page Title: {page_title}")
+                
+                if "requested URL was rejected" in body_text or "Request Rejected" in body_text or "rejected" in page_title.lower():
+                    print(f"  [WAF Blocked] Proxy {proxy} was rejected. Trying next...")
+                    browser.close()
+                    continue
+
+                # Wait for Angular app to fully load
+                print("  Waiting for Angular app to load...")
+                page.wait_for_selector("ng-select, .ng-select-container", timeout=25000)
+                page.wait_for_timeout(2000)
+                
+                # IF WE REACH HERE, navigation was successful
+                # Now execute the rest of the logic
+                run_automation_logic(page, reader, unchecked_companies)
+                
+                browser.close()
+                return # SUCCESS! Exit the proxy loop
+
+            except Exception as e:
+                print(f"  [Connection Error] Proxy {proxy} failed: {e}")
+                try: browser.close()
+                except: pass
+                continue # Try next proxy
+
+    print("\n[CRITICAL] All proxy attempts failed.")
+
+def run_automation_logic(page, reader, unchecked_companies):
+    # Move the actual scraping logic here (was previously in run_status_check)
+    try:
+        # Read all companies from CDSC dropdown
+        all_cdsc_companies = []
+        for attempt in range(3):
+            page.locator("ng-select").first.click()
+            page.wait_for_timeout(2000)
+            all_cdsc_companies = page.evaluate("""
+                () => Array.from(document.querySelectorAll('.ng-option, ng-dropdown-panel .ng-option'))
+                     .map(o => o.innerText.trim())
+                     .filter(t => t.length > 3)
+            """)
+            if all_cdsc_companies:
+                break
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(1500)
+        
+        if not all_cdsc_companies:
+            print("[Error] Could not read company list from CDSC portal.")
+            return
+
+        print(f"  Found {len(all_cdsc_companies)} companies on CDSC portal.")
+
+        # Match unchecked companies with CDSC portal names
+        def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').replace('ltd.', 'ltd').strip().lower()
+        matches = []
+        for c_name in all_cdsc_companies:
+            c_norm = norm(c_name)
+            for db_name in unchecked_companies:
+                db_norm = norm(db_name)
+                if c_norm in db_norm or db_norm in c_norm:
+                    matches.append({'cdsc': c_name, 'db': db_name})
+                    break
+        
+        if not matches:
+            print(f" Found {len(unchecked_companies)} unchecked companies in DB, but none match the current CDSC results list.")
+            return
+
+        print(f"Starting smart check for {len(matches)} matched companies...")
+
+        for m in matches:
+            # Find only accounts that haven't been checked for THIS specific company
+            target_accounts = get_unchecked_accounts_for_company(m['db'])
+            if not target_accounts:
+                continue
+
+            print(f"\n[Company] {m['cdsc']} (Checking {len(target_accounts)} accounts)")
+            
+            # Navigate once per company to avoid triggering WAF for every single account check
+            try:
+                page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                page.wait_for_timeout(random.randint(2000, 4000))
+            except: pass
+
+            for account in target_accounts:
+                username = account.get('MEROSHARE_USER')
+                boid = account.get('BOID')
+                if not boid: continue
+                
+                try:
+                    print(f"   [{username}] Checking...")
                     
-                    try:
-                        print(f"   [{username}] Checking...")
-                        
-                        # Use a resilient click that handles WAF overlays
-                        def smart_click(selector):
-                            try:
-                                el = page.locator(selector).first
-                                el.wait_for(state="visible", timeout=10000)
-                                box = el.bounding_box()
-                                if box:
-                                    # Human-like movement then click with force=True to bypass interception
-                                    page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                    page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                    # Fallback click just in case
-                                    el.click(force=True, timeout=2000)
-                                else:
-                                    el.click(force=True)
-                            except:
-                                try: page.locator(selector).first.click(force=True)
-                                except: pass
+                    # Use a resilient click that handles WAF overlays
+                    def smart_click(selector):
+                        try:
+                            el = page.locator(selector).first
+                            el.wait_for(state="visible", timeout=10000)
+                            box = el.bounding_box()
+                            if box:
+                                # Human-like movement then click with force=True to bypass interception
+                                page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                # Fallback click just in case
+                                el.click(force=True, timeout=2000)
+                            else:
+                                el.click(force=True)
+                        except:
+                            try: page.locator(selector).first.click(force=True)
+                            except: pass
 
-                        # Selection with human-like typing
-                        smart_click(".ng-select-container")
-                        page.wait_for_timeout(500)
-                        page.keyboard.type(m['cdsc'], delay=80)
-                        page.wait_for_timeout(800)
-                        page.keyboard.press("Enter")
+                    # Selection with human-like typing
+                    smart_click(".ng-select-container")
+                    page.wait_for_timeout(500)
+                    page.keyboard.type(m['cdsc'], delay=80)
+                    page.wait_for_timeout(800)
+                    page.keyboard.press("Enter")
+                    
+                    # BOID with human-like typing
+                    print(f"      Typing BOID...")
+                    smart_click("input#boid")
+                    page.keyboard.press("Control+A")
+                    page.keyboard.press("Backspace")
+                    page.keyboard.type(boid, delay=random.randint(80, 150))
+                    
+                    # Try solving captcha (up to 3 times per account check)
+                    print(f"      Solving Captcha...")
+                    for cap_attempt in range(3):
+                        cap = solve_captcha(page, reader)
+                        if not cap: continue
                         
-                        # BOID with human-like typing
-                        print(f"      Typing BOID...")
-                        smart_click("input#boid")
-                        page.keyboard.press("Control+A")
-                        page.keyboard.press("Backspace")
-                        page.keyboard.type(boid, delay=random.randint(80, 150))
+                        # Use JS fill to bypass WAF iframe interception on input fields
+                        page.evaluate(f"""() => {{
+                            const el = document.querySelector('#captcha');
+                            if (el) {{
+                                el.value = '{cap}';
+                                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                            }}
+                        }}""")
+                        page.wait_for_timeout(300)
                         
-                        # Try solving captcha (up to 3 times per account check)
-                        print(f"      Solving Captcha...")
-                        for cap_attempt in range(3):
-                            cap = solve_captcha(page, reader)
-                            if not cap: continue
+                        # Submit via smart_click which uses coordinate-based mouse click
+                        smart_click("button:has-text('View Result')")
                             
-                            # Use JS fill to bypass WAF iframe interception on input fields
-                            page.evaluate(f"""() => {{
-                                const el = document.querySelector('#captcha');
-                                if (el) {{
-                                    el.value = '{cap}';
-                                    el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                                    el.dispatchEvent(new Event('change', {{bubbles: true}}));
-                                }}
-                            }}""")
-                            page.wait_for_timeout(300)
-                            
-                            # Submit via smart_click which uses coordinate-based mouse click
-                            smart_click("button:has-text('View Result')")
-                                
-                            page.wait_for_timeout(2500)
-                            
-                            res = page.evaluate("""
-                                () => {
-                                    const b = document.body.innerText;
-                                    if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].strip();
-                                    if (b.includes("Sorry")) return "Not Allotted|Sorry, not allotted.";
-                                    if (b.includes("Invalid Captcha")) return "RETRY";
-                                    return "Pending|No result found.";
-                                }
-                            """)
-                            
-                            if res == "RETRY":
-                                print(f"      [Captcha] Incorrect code. Retrying attempt {cap_attempt+1}...")
-                                continue
-                            
-                            if res == "Pending|No result found.":
-                                print(f"      [Check] No result found (possible timeout or site delay).")
-                                continue
+                        page.wait_for_timeout(2500)
+                        
+                        res = page.evaluate("""
+                            () => {
+                                const b = document.body.innerText;
+                                if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].strip();
+                                if (b.includes("Sorry")) return "Not Allotted|Sorry, not allotted.";
+                                if (b.includes("Invalid Captcha")) return "RETRY";
+                                return "Pending|No result found.";
+                            }
+                        """)
+                        
+                        if res == "RETRY":
+                            print(f"      [Captcha] Incorrect code. Retrying attempt {cap_attempt+1}...")
+                            continue
+                        
+                        if res == "Pending|No result found.":
+                            print(f"      [Check] No result found (possible timeout or site delay).")
+                            continue
 
-                            status, feedback = res.split("|")
-                            print(f"      Result: {status}")
-                            
-                            if status != "Pending":
-                                save_result_to_db(account, m['db'], status, feedback)
-                                send_push_notification(account.get('TOKENS'), username, f"{m['cdsc']}: {status} - {feedback}")
-                            break
-                    except Exception as e:
-                        print(f"     Error for {username}: {e}")
+                        status, feedback = res.split("|")
+                        print(f"      Result: {status}")
+                        
+                        if status != "Pending":
+                            save_result_to_db(account, m['db'], status, feedback)
+                            send_push_notification(account.get('TOKENS'), username, f"{m['cdsc']}: {status} - {feedback}")
+                        break
+                except Exception as e:
+                    print(f"     Error for {username}: {e}")
 
-        except Exception as e:
-            print(f"Fatal Error: {e}")
-        finally:
-            browser.close()
+    except Exception as e:
+        print(f"Fatal Error in automation logic: {e}")
 
 if __name__ == "__main__":
     run_status_check()

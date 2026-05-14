@@ -36,20 +36,20 @@ def find_working_proxy():
 
         working = [r for r in results if r]
         if working:
-            print(f"Success! Found {len(working)} working proxies. Using: {working[0]}")
-            return working[0]
+            print(f"Success! Found {len(working)} working proxies. Saving top 5...")
+            return working[:5]
         else:
             print("No working proxy found that bypasses CDSC WAF.")
     except Exception as e:
         print(f"Error fetching proxies: {e}")
 
-    return None
+    return []
 
 if __name__ == "__main__":
-    p = find_working_proxy()
-    if p:
+    proxies = find_working_proxy()
+    if proxies:
         with open("proxy.txt", "w") as f:
-            f.write(p)
-        print(f"Proxy saved to proxy.txt: {p}")
+            f.write("\n".join(proxies))
+        print(f"Saved {len(proxies)} proxies to proxy.txt")
     else:
         print("No working proxy found.")
