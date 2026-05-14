@@ -205,6 +205,11 @@ def solve_captcha(page, reader, max_retries=3):
                     last_hash = current_hash
                     break
                 
+                # If image is completely white, it's a sign of a broken state/WAF block
+                if white_ratio > 0.99 and refresh_attempt > 1:
+                    print("      [Captcha] Blank image detected. Force reloading page...")
+                    return "RELOAD"
+
                 print(f"      [Captcha] Refresh needed (white={white_ratio:.2f}, same={current_hash == last_hash}). Attempt {refresh_attempt+1}...")
                 
                 # Try clicking refresh button with a human-like delay
@@ -365,14 +370,14 @@ def run_status_check():
             except: pass
 
 def run_automation_logic(page, reader, unchecked_companies):
-    # Move the actual scraping logic here (was previously in run_status_check)
+    url = "https://iporesult.cdsc.com.np/"
     try:
         # Read all companies from CDSC dropdown
         all_cdsc_companies = []
         print("  Opening company dropdown...")
-        for attempt in range(5): # More attempts for slow proxies
+        for attempt in range(5):
             page.locator("ng-select").first.click()
-            page.wait_for_timeout(3000) # Wait longer for list to populate
+            page.wait_for_timeout(3000)
             
             all_cdsc_companies = page.evaluate("""
                 () => Array.from(document.querySelectorAll('.ng-option, ng-dropdown-panel .ng-option'))
@@ -380,7 +385,7 @@ def run_automation_logic(page, reader, unchecked_companies):
                      .filter(t => t.length > 3)
             """)
             
-            if len(all_cdsc_companies) > 5: # Real list is large
+            if len(all_cdsc_companies) > 5:
                 break
             
             print(f"    Dropdown has only {len(all_cdsc_companies)} items. Retrying ({attempt+1}/5)...")
@@ -392,8 +397,6 @@ def run_automation_logic(page, reader, unchecked_companies):
             return
 
         print(f"  Found {len(all_cdsc_companies)} companies on CDSC portal.")
-        if len(all_cdsc_companies) <= 5:
-            print(f"  [Debug] Found companies: {all_cdsc_companies}")
 
         # Match unchecked companies with CDSC portal names
         def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').replace('ltd.', 'ltd').replace('company', '').replace('hydropower', 'hp').strip()
@@ -403,34 +406,23 @@ def run_automation_logic(page, reader, unchecked_companies):
             c_norm = norm(c_name)
             for db_name in unchecked_companies:
                 db_norm = norm(db_name)
-                # Fuzzy match: check if one contains the other or vice versa
                 if c_norm in db_norm or db_norm in c_norm or c_norm.replace(' ', '') in db_norm.replace(' ', ''):
                     matches.append({'cdsc': c_name, 'db': db_name})
                     break
         
         if not matches:
-            print(f"  No matching companies found. (Checked {len(unchecked_companies)} in DB vs {len(all_cdsc_companies)} on portal)")
-            # Print a few examples for debugging
-            print(f"  [Match Debug] CDSC Sample: {all_cdsc_companies[:3]}")
-            print(f"  [Match Debug] DB Sample: {unchecked_companies[:3]}")
+            print(f"  No matching companies found.")
             return
 
         print(f"Starting smart check for {len(matches)} matched companies...")
 
         for m in matches:
-            # Find only accounts that haven't been checked for THIS specific company
             target_accounts = get_unchecked_accounts_for_company(m['db'])
             if not target_accounts:
                 continue
 
             print(f"\n[Company] {m['cdsc']} (Checking {len(target_accounts)} accounts)")
             
-            # Navigate once per company to avoid triggering WAF for every single account check
-            try:
-                page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                page.wait_for_timeout(random.randint(2000, 4000))
-            except: pass
-
             for account in target_accounts:
                 username = account.get('MEROSHARE_USER')
                 boid = account.get('BOID')
@@ -439,17 +431,14 @@ def run_automation_logic(page, reader, unchecked_companies):
                 try:
                     print(f"   [{username}] Checking...")
                     
-                    # Use a resilient click that handles WAF overlays
                     def smart_click(selector):
                         try:
                             el = page.locator(selector).first
                             el.wait_for(state="visible", timeout=10000)
                             box = el.bounding_box()
                             if box:
-                                # Human-like movement then click with force=True to bypass interception
                                 page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
                                 page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                # Fallback click just in case
                                 el.click(force=True, timeout=2000)
                             else:
                                 el.click(force=True)
@@ -457,22 +446,22 @@ def run_automation_logic(page, reader, unchecked_companies):
                             try: page.locator(selector).first.click(force=True)
                             except: pass
 
-                    # Selection with human-like typing
+                    # Selection
                     smart_click(".ng-select-container")
                     page.wait_for_timeout(500)
                     page.keyboard.type(m['cdsc'], delay=80)
                     page.wait_for_timeout(800)
                     page.keyboard.press("Enter")
                     
-                    # BOID with human-like typing
+                    # BOID
                     print(f"      Typing BOID...")
                     smart_click("input#boid")
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Backspace")
                     page.keyboard.type(boid, delay=random.randint(80, 150))
-                    page.keyboard.press("Tab") # Lose focus to trigger captcha
+                    page.keyboard.press("Tab")
                     
-                    # Try solving captcha (up to 3 times per account check)
+                    # Captcha loop
                     print(f"      Solving Captcha...")
                     need_reload = False
                     for cap_attempt in range(4):
@@ -482,7 +471,6 @@ def run_automation_logic(page, reader, unchecked_companies):
                             break
                         if not cap: continue
                         
-                        # Use JS fill to bypass WAF iframe interception on input fields
                         page.evaluate(f"""() => {{
                             const el = document.querySelector('#captcha') || document.querySelector('#userCaptcha') || document.querySelector('input[name="captcha"]');
                             if (el) {{
@@ -493,9 +481,7 @@ def run_automation_logic(page, reader, unchecked_companies):
                         }}""")
                         page.wait_for_timeout(500)
                         
-                        # Submit via smart_click which uses coordinate-based mouse click
                         smart_click("button:has-text('View Result')")
-                            
                         page.wait_for_timeout(3000)
                         
                         res = page.evaluate("""
@@ -504,6 +490,7 @@ def run_automation_logic(page, reader, unchecked_companies):
                                 if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].strip();
                                 if (b.includes("Sorry")) return "Not Allotted|Sorry, not allotted.";
                                 if (b.includes("Invalid Captcha")) return "RETRY";
+                                if (b.includes("Not Found") || b.includes("not found")) return "Not Allotted|BOID not found for this company.";
                                 return "Pending|No result found.";
                             }
                         """)
@@ -513,7 +500,6 @@ def run_automation_logic(page, reader, unchecked_companies):
                             continue
                         
                         if res == "Pending|No result found.":
-                            # Check for WAF rejection in sub-frame or page
                             if "rejected" in page.title().lower() or "Request Rejected" in page.content():
                                 print("      [Check] WAF Blocked during check. Reloading page...")
                                 need_reload = True
@@ -530,11 +516,8 @@ def run_automation_logic(page, reader, unchecked_companies):
                         break
                     
                     if need_reload:
-                        # Break this account loop to reload and retry
                         page.goto(url, wait_until='networkidle')
                         page.wait_for_timeout(3000)
-                        # Actually we should probably continue to re-enter BOID etc.
-                        # The simplest way is to just let the loop continue and it will re-enter data
                         continue
                 except Exception as e:
                     print(f"     Error for {username}: {e}")
