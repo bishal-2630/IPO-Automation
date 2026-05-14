@@ -153,64 +153,65 @@ def solve_captcha(page, reader, max_retries=3):
         try:
             captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
             captcha_img.wait_for(state="visible", timeout=20000)
-            
-            # Wait for real captcha — keep screenshotting until image is not blank/white
+
+            # Wait for real captcha — keep screenshotting until image has actual content
             captcha_bytes = None
-            for wait_attempt in range(15):
+            for _ in range(15):
                 raw = captcha_img.screenshot()
                 img_check = Image.open(io.BytesIO(raw)).convert('L')
-                pixels = list(img_check.getdata())
-                # A blank/white image has >95% pixels near 255
-                white_ratio = sum(1 for p in pixels if p > 240) / len(pixels)
-                if white_ratio < 0.9:  # Real image has content
+                all_px = list(img_check.getdata())
+                white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
+                if white_ratio < 0.9:
                     captcha_bytes = raw
                     break
-                print(f"      [Captcha] Blank image detected (white_ratio={white_ratio:.2f}), waiting...")
+                print(f"      [Captcha] Blank image (white={white_ratio:.2f}), waiting...")
                 captcha_img.click(force=True)
                 page.wait_for_timeout(2000)
-            
+
             if not captcha_bytes:
                 print(f"      [Captcha] Could not load real captcha image. Skipping attempt {attempt+1}.")
                 continue
 
-            # Save for debugging
             os.makedirs("screenshots", exist_ok=True)
             with open(f"screenshots/captcha_attempt_{attempt}.png", "wb") as f:
                 f.write(captcha_bytes)
-            
+
             img = Image.open(io.BytesIO(captcha_bytes)).convert('L')
-            
-            # Upscale image for better OCR accuracy
             w, h = img.size
-            img3x = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
-            
-            # Enhancement suite
+            img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
+
             enhancements = [
-                img,                                          # Original
-                img3x,                                        # 3x upscaled
-                ImageEnhance.Contrast(img3x).enhance(2.5),   # High contrast
-                img3x.point(lambda p: p > 128 and 255),      # Binary threshold
-                ImageOps.invert(img3x.point(lambda p: p > 128 and 255)),  # Inverted binary
-                ImageEnhance.Sharpness(img3x).enhance(4.0),  # Very sharp
+                img,
+                img3x,
+                ImageEnhance.Contrast(img3x).enhance(2.0),
+                ImageEnhance.Contrast(img3x).enhance(3.0),
+                img3x.point(lambda p: 255 if p > 100 else 0),
+                img3x.point(lambda p: 255 if p > 150 else 0),
+                img3x.point(lambda p: 255 if p > 180 else 0),
+                ImageOps.invert(img3x.point(lambda p: 255 if p > 128 else 0)),
+                ImageEnhance.Sharpness(img3x).enhance(5.0),
             ]
-            
-            possible_texts = []
+
+            best_code = None
             for e_img in enhancements:
                 buf = io.BytesIO()
                 e_img.save(buf, format='PNG')
-                res = reader.readtext(buf.getvalue(), allowlist='0123456789')
-                if res:
-                    for r in res:
-                        text = "".join(re.findall(r'\d', r[1]))
-                        if len(text) == 5:
-                            possible_texts.append(text)
+                results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=1)
+                # Concatenate ALL digits across ALL bounding boxes
+                all_digits = "".join(re.findall(r'\d', " ".join(r[1] for r in results)))
+                if results:
+                    print(f"      [Captcha] OCR: {[r[1] for r in results]} -> '{all_digits}'")
+                if len(all_digits) == 5:
+                    best_code = all_digits
+                    break
+                if len(all_digits) == 4 and not best_code:
+                    best_code = all_digits  # Keep 4-digit as fallback
 
-            if possible_texts:
-                final_text = max(set(possible_texts), key=possible_texts.count)
-                print(f"      [Captcha] Solved: {final_text}")
-                return final_text
-            
-            print(f"      [Captcha] Attempt {attempt+1}: no 5-digit code found. Refreshing...")
+            if best_code and len(best_code) >= 4:
+                print(f"      [Captcha] Solved: {best_code}")
+                return best_code
+
+            print(f"      [Captcha] Attempt {attempt+1}: no code found. Refreshing...")
             captcha_img.click(force=True)
             page.wait_for_timeout(2500)
         except Exception as e:
