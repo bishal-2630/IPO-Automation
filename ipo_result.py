@@ -233,18 +233,31 @@ def run_status_check():
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            channel='chrome',  # Use REAL Chrome - bypasses TLS fingerprint WAF detection
-            ignore_default_args=["--enable-automation"],
-            args=[
+        # --- Proxy Setup ---
+        proxy = os.environ.get("PROXY_SERVER")
+        if not proxy and os.path.exists("proxy.txt"):
+            with open("proxy.txt") as f:
+                proxy = f.read().strip()
+        
+        launch_kwargs = {
+            "headless": os.environ.get("HEADLESS", "true").lower() != "false",
+            "channel": "chrome",
+            "ignore_default_args": ["--enable-automation"],
+            "args": [
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--window-size=1280,800',
+                '--window-size=1366,768',
             ]
-        )
+        }
+        if proxy:
+            print(f"  [Proxy] Using proxy: {proxy}")
+            launch_kwargs["proxy"] = {"server": f"http://{proxy}"}
+        else:
+            print("  [Proxy] No proxy found — connecting directly (may be WAF blocked).")
+
+        browser = p.chromium.launch(**launch_kwargs)
         context = browser.new_context(
             viewport={"width": 1366, "height": 768},
             locale="en-US",
