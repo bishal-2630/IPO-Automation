@@ -151,8 +151,8 @@ def solve_captcha(page, reader, max_retries=3):
     for attempt in range(max_retries):
         try:
             # More specific selector for CDSC captcha
-            captcha_img = page.locator("img[src*='Captcha'], .captcha-image img, #captcha_image").first
-            captcha_img.wait_for(state="visible", timeout=15000)
+            captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
+            captcha_img.wait_for(state="visible", timeout=20000)
             captcha_bytes = captcha_img.screenshot()
             
             # Save for debugging if needed
