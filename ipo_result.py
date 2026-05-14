@@ -150,37 +150,56 @@ def get_unchecked_accounts_for_company(company_name):
 def solve_captcha(page, reader, max_retries=3):
     for attempt in range(max_retries):
         try:
-            captcha_img = page.locator("img[src*='captcha'], .captcha-image img").first
-            captcha_img.wait_for(state="visible", timeout=10000)
+            # More specific selector for CDSC captcha
+            captcha_img = page.locator("img[src*='Captcha'], .captcha-image img, #captcha_image").first
+            captcha_img.wait_for(state="visible", timeout=15000)
             captcha_bytes = captcha_img.screenshot()
+            
+            # Save for debugging if needed
+            os.makedirs("screenshots", exist_ok=True)
+            with open(f"screenshots/captcha_attempt_{attempt}.png", "wb") as f:
+                f.write(captcha_bytes)
             
             import io
             img = Image.open(io.BytesIO(captcha_bytes)).convert('L')
+            
+            # Enhancement suite
             enhancements = [
-                ImageEnhance.Contrast(img).enhance(2.0),
-                ImageOps.invert(img),
-                ImageEnhance.Sharpness(img).enhance(3.0)
+                img, # Raw grayscale
+                ImageEnhance.Contrast(img).enhance(2.0), # High contrast
+                img.point(lambda p: p > 128 and 255), # Binary threshold
+                ImageOps.invert(img), # Inverted
+                ImageEnhance.Sharpness(img).enhance(3.0) # Sharp
             ]
+            
             possible_texts = []
             for e_img in enhancements:
                 buf = io.BytesIO()
                 e_img.save(buf, format='PNG')
-                res = reader.readtext(buf.getvalue())
+                res = reader.readtext(buf.getvalue(), allowlist='0123456789')
                 if res:
-                    text = "".join(re.findall(r'\d', res[0][1]))
-                    if len(text) == 5: possible_texts.append(text)
+                    for r in res:
+                        text = "".join(re.findall(r'\d', r[1]))
+                        if len(text) == 5:
+                            possible_texts.append(text)
 
             if possible_texts:
                 final_text = max(set(possible_texts), key=possible_texts.count)
                 print(f"      [Captcha] Solved: {final_text}")
                 return final_text
             
-            print(f"      [Captcha] Attempt {attempt+1} unclear. Refreshing...")
-            refresh_btn = page.locator(".fa-refresh, button:has-text('Refresh')").first
-            if refresh_btn.is_visible(): refresh_btn.click()
-            else: page.reload()
+            print(f"      [Captcha] Attempt {attempt+1} failed to read. Refreshing...")
+            # Try to find a refresh button or just click the image
+            refresh = page.locator(".fa-refresh, .refresh-captcha, button:has-text('Refresh')").first
+            if refresh.is_visible():
+                refresh.click()
+            else:
+                captcha_img.click() # Clicking the image often refreshes it
+            
             page.wait_for_timeout(2000)
-        except: pass
+        except Exception as e:
+            print(f"      [Captcha] Error: {e}")
+    print("      [Captcha] Failed all attempts.")
     return None
 
 def run_status_check():
@@ -380,6 +399,10 @@ def run_status_check():
                                 print(f"      [Captcha] Incorrect code. Retrying attempt {cap_attempt+1}...")
                                 continue
                             
+                            if res == "Pending|No result found.":
+                                print(f"      [Check] No result found (possible timeout or site delay).")
+                                continue
+
                             status, feedback = res.split("|")
                             print(f"      Result: {status}")
                             
