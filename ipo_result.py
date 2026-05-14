@@ -151,7 +151,6 @@ def solve_captcha(page, reader, max_retries=5):
     import io, hashlib
     last_hash = None
     
-    # Broadened selectors to be more resilient
     selectors = [
         "img[src*='Captcha']", "img[src*='captcha']", 
         ".captcha-image img", "#captcha_image", 
@@ -164,25 +163,18 @@ def solve_captcha(page, reader, max_retries=5):
             for sel in selectors:
                 try:
                     el = page.locator(sel).first
-                    if el.is_visible(timeout=2000):
+                    if el.is_visible(timeout=1000):
                         captcha_img = el
                         break
                 except: continue
             
             if not captcha_img:
-                if attempt == 0:
-                    print("      [Captcha] Image not visible. Waiting...")
-                    page.wait_for_timeout(3000)
-                    continue
-                else:
-                    os.makedirs("screenshots", exist_ok=True)
-                    page.screenshot(path="screenshots/captcha_not_found.png")
-                    print(f"      [Captcha] Could not find image element. Screenshot saved.")
-                    return None
+                page.wait_for_timeout(2000)
+                continue
 
-            # 1. Capture and wait for a real (non-blank) image
+            # 1. Capture and wait for a real, fresh image
             captcha_bytes = None
-            for _ in range(10):
+            for refresh_attempt in range(12):
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
@@ -190,16 +182,33 @@ def solve_captcha(page, reader, max_retries=5):
                 all_px = list(img_check.getdata())
                 white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
                 
+                # Success if not blank and not same as before
                 if white_ratio < 0.9 and current_hash != last_hash:
                     captcha_bytes = raw
                     last_hash = current_hash
                     break
                 
-                print(f"      [Captcha] Refreshing (white={white_ratio:.2f}, same={current_hash == last_hash})...")
-                captcha_img.click(force=True)
-                try: page.locator(".fa-refresh, .captcha-refresh, i.refresh, .refresh-icon").first.click(timeout=1000)
+                print(f"      [Captcha] Stuck image (white={white_ratio:.2f}, same={current_hash == last_hash}). Forcing JS refresh...")
+                
+                # TRICK: Force refresh via JS by appending a random param to the SRC
+                page.evaluate("""
+                    (sel) => {
+                        const img = document.querySelector(sel);
+                        if (img) {
+                            const base = img.src.split('?')[0];
+                            img.src = base + '?v=' + Date.now();
+                        }
+                    }
+                """, selectors[0]) # Try with first selector
+                
+                # Also try physical click as fallback
+                try:
+                    box = captcha_img.bounding_box()
+                    if box:
+                        page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
                 except: pass
-                page.wait_for_timeout(2000)
+                
+                page.wait_for_timeout(2500)
 
             if not captcha_bytes:
                 continue
@@ -236,9 +245,9 @@ def solve_captcha(page, reader, max_retries=5):
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            print(f"      [Captcha] Attempt {attempt+1}: No 5-digit code. Retrying...")
-            captcha_img.click(force=True)
-            page.wait_for_timeout(2000)
+            # If no 5-digit code, trigger JS refresh for next attempt
+            page.evaluate("(sel) => { const img = document.querySelector(sel); if(img) img.src = img.src.split('?')[0] + '?v=' + Date.now(); }", selectors[0])
+            page.wait_for_timeout(1000)
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
