@@ -151,11 +151,34 @@ def solve_captcha(page, reader, max_retries=5):
     import io, hashlib
     last_hash = None
     
+    # Broadened selectors to be more resilient
+    selectors = [
+        "img[src*='Captcha']", "img[src*='captcha']", 
+        ".captcha-image img", "#captcha_image", 
+        "img[alt*='captcha']", ".captcha-img"
+    ]
+    
     for attempt in range(max_retries):
         try:
-            # More specific selector for the actual captcha image
-            captcha_img = page.locator("img[src*='Captcha'], img[src*='captcha'], .captcha-image img").first
-            captcha_img.wait_for(state="visible", timeout=15000)
+            captcha_img = None
+            for sel in selectors:
+                try:
+                    el = page.locator(sel).first
+                    if el.is_visible(timeout=2000):
+                        captcha_img = el
+                        break
+                except: continue
+            
+            if not captcha_img:
+                if attempt == 0:
+                    print("      [Captcha] Image not visible. Waiting...")
+                    page.wait_for_timeout(3000)
+                    continue
+                else:
+                    os.makedirs("screenshots", exist_ok=True)
+                    page.screenshot(path="screenshots/captcha_not_found.png")
+                    print(f"      [Captcha] Could not find image element. Screenshot saved.")
+                    return None
 
             # 1. Capture and wait for a real (non-blank) image
             captcha_bytes = None
@@ -167,21 +190,18 @@ def solve_captcha(page, reader, max_retries=5):
                 all_px = list(img_check.getdata())
                 white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
                 
-                # If image is white OR the same as last time, it's not "fresh"
                 if white_ratio < 0.9 and current_hash != last_hash:
                     captcha_bytes = raw
                     last_hash = current_hash
                     break
                 
-                print(f"      [Captcha] Not fresh (white={white_ratio:.2f}, same={current_hash == last_hash}). Refreshing...")
-                # Try clicking both the image and any refresh icon nearby
+                print(f"      [Captcha] Refreshing (white={white_ratio:.2f}, same={current_hash == last_hash})...")
                 captcha_img.click(force=True)
-                try: page.locator(".fa-refresh, .captcha-refresh, i.refresh").first.click(timeout=1000)
+                try: page.locator(".fa-refresh, .captcha-refresh, i.refresh, .refresh-icon").first.click(timeout=1000)
                 except: pass
                 page.wait_for_timeout(2000)
 
             if not captcha_bytes:
-                print(f"      [Captcha] Image stuck or blank. Attempt {attempt+1} failed.")
                 continue
 
             os.makedirs("screenshots", exist_ok=True)
@@ -196,9 +216,8 @@ def solve_captcha(page, reader, max_retries=5):
                 img,
                 img3x,
                 ImageEnhance.Contrast(img3x).enhance(2.0),
-                img3x.point(lambda p: 255 if p > 128 else 0), # Binary
-                ImageOps.invert(img3x.point(lambda p: 255 if p > 128 else 0)), # Inverted
-                ImageEnhance.Sharpness(img3x).enhance(5.0),
+                img3x.point(lambda p: 255 if p > 128 else 0),
+                ImageOps.invert(img3x.point(lambda p: 255 if p > 128 else 0)),
             ]
 
             best_code = None
@@ -206,12 +225,9 @@ def solve_captcha(page, reader, max_retries=5):
                 buf = io.BytesIO()
                 e_img.save(buf, format='PNG')
                 results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=1)
-                
                 all_digits = "".join(re.findall(r'\d', "".join(r[1] for r in results)))
                 if results:
                     print(f"      [Captcha] OCR Raw: {[r[1] for r in results]} -> '{all_digits}'")
-                
-                # CDSC captchas are strictly 5 digits
                 if len(all_digits) == 5:
                     best_code = all_digits
                     break
@@ -220,14 +236,13 @@ def solve_captcha(page, reader, max_retries=5):
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            print(f"      [Captcha] Attempt {attempt+1}: No 5-digit code found. Forcing refresh...")
+            print(f"      [Captcha] Attempt {attempt+1}: No 5-digit code. Retrying...")
             captcha_img.click(force=True)
             page.wait_for_timeout(2000)
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
     
-    print("      [Captcha] Failed all attempts.")
     return None
 
 def run_status_check():
@@ -424,6 +439,7 @@ def run_automation_logic(page, reader, unchecked_companies):
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Backspace")
                     page.keyboard.type(boid, delay=random.randint(80, 150))
+                    page.keyboard.press("Tab") # Lose focus to trigger captcha
                     
                     # Try solving captcha (up to 3 times per account check)
                     print(f"      Solving Captcha...")
