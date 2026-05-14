@@ -201,6 +201,7 @@ def run_status_check():
         browser = p.chromium.launch(
             headless=True,
             channel='chrome',  # Use REAL Chrome - bypasses TLS fingerprint WAF detection
+            ignore_default_args=["--enable-automation"],
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
@@ -210,24 +211,9 @@ def run_status_check():
             ]
         )
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800},
             locale="en-US",
             timezone_id="Asia/Kathmandu",
-            extra_http_headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
-                "Sec-CH-UA": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-                "Sec-CH-UA-Mobile": "?0",
-                "Sec-CH-UA-Platform": '"Windows"',
-            }
         )
         # Mask automation flags
         context.add_init_script("""
@@ -235,17 +221,26 @@ def run_status_check():
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
         """)
         page = context.new_page()
+        if HAS_STEALTH and stealth_sync:
+            stealth_sync(page)
         url = "https://iporesult.cdsc.com.np/"
         
         try:
             print(f"Navigating to {url}...")
-            page.goto(url, wait_until='networkidle', timeout=60000)
-            page.wait_for_timeout(3000)
+            page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            # Randomized delay to mimic human behavior
+            page.wait_for_timeout(random.randint(3000, 6000))
             
             # Check if WAF blocked us
             body_text = page.inner_text("body")
-            if "requested URL was rejected" in body_text or "Request Rejected" in body_text:
-                print("[CRITICAL] WAF blocked the request. Try changing your IP or waiting.")
+            page_title = page.title()
+            print(f"  Page Title: {page_title}")
+            
+            if "requested URL was rejected" in body_text or "Request Rejected" in body_text or "rejected" in page_title.lower():
+                print(f"[CRITICAL] WAF blocked the request. Title: {page_title}. Body length: {len(body_text)}")
+                # Save screenshot for debugging
+                os.makedirs("screenshots", exist_ok=True)
+                page.screenshot(path="screenshots/waf_block.png")
                 return
 
             # Wait for Angular app to fully load
