@@ -12,7 +12,7 @@ import psycopg2
 import logging
 from notifications import send_email_notification, send_push_notification
 try:
-    from PIL import Image, ImageEnhance, ImageOps
+    from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 except ImportError:
     pass
 
@@ -147,20 +147,29 @@ def get_unchecked_accounts_for_company(company_name):
         return [acc for acc in accounts if acc.get('ID') not in checked_ids]
     except: return accounts
 
-def solve_captcha(page, reader, max_retries=5):
+def solve_captcha(page, reader, max_retries=3):
     import io, hashlib
     last_hash = None
     
-    selectors = [
+    img_selectors = [
         "img[src*='Captcha']", "img[src*='captcha']", 
         ".captcha-image img", "#captcha_image", 
         "img[alt*='captcha']", ".captcha-img"
     ]
     
+    # Updated refresh selectors based on browser subagent findings
+    refresh_selectors = [
+        "button.btn:last-child",
+        "button[title='Reload Captcha']", 
+        "button:has(.fa-refresh)", 
+        "button:has(.fa-sync)",
+        ".captcha-refresh"
+    ]
+    
     for attempt in range(max_retries):
         try:
             captcha_img = None
-            for sel in selectors:
+            for sel in img_selectors:
                 try:
                     el = page.locator(sel).first
                     if el.is_visible(timeout=1000):
@@ -169,85 +178,111 @@ def solve_captcha(page, reader, max_retries=5):
                 except: continue
             
             if not captcha_img:
+                print("      [Captcha] Image not found. Waiting...")
                 page.wait_for_timeout(2000)
                 continue
 
             # 1. Capture and wait for a real, fresh image
             captcha_bytes = None
-            for refresh_attempt in range(12):
+            for refresh_attempt in range(4):
+                # Small wait for animation/load
+                page.wait_for_timeout(1000)
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
                 img_check = Image.open(io.BytesIO(raw)).convert('L')
-                all_px = list(img_check.getdata())
+                import numpy as np
+                try:
+                    all_px = np.array(img_check).flatten()
+                except:
+                    all_px = list(img_check.getdata())
+                
                 white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
                 
-                # Success if not blank and not same as before
-                if white_ratio < 0.9 and current_hash != last_hash:
+                # If it's a valid image (not all white) and (first time OR changed from last)
+                if white_ratio < 0.95 and (last_hash is None or current_hash != last_hash):
                     captcha_bytes = raw
                     last_hash = current_hash
                     break
                 
-                print(f"      [Captcha] Stuck image (white={white_ratio:.2f}, same={current_hash == last_hash}). Forcing JS refresh...")
+                print(f"      [Captcha] Refresh needed (white={white_ratio:.2f}, same={current_hash == last_hash}). Attempt {refresh_attempt+1}...")
                 
-                # TRICK: Force refresh via JS by appending a random param to the SRC
-                page.evaluate("""
-                    (sel) => {
-                        const img = document.querySelector(sel);
-                        if (img) {
-                            const base = img.src.split('?')[0];
-                            img.src = base + '?v=' + Date.now();
-                        }
-                    }
-                """, selectors[0]) # Try with first selector
+                # Try clicking refresh button with a human-like delay
+                page.wait_for_timeout(random.randint(1500, 3000))
+                refreshed = False
+                for r_sel in refresh_selectors:
+                    try:
+                        btn = page.locator(r_sel).first
+                        if btn.is_visible(timeout=500):
+                            btn.click(force=True)
+                            refreshed = True
+                            break
+                    except: continue
                 
-                # Also try physical click as fallback
-                try:
-                    box = captcha_img.bounding_box()
-                    if box:
-                        page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                except: pass
+                if not refreshed:
+                    # Fallback: JS refresh
+                    page.evaluate("(sel) => { const img = document.querySelector(sel); if(img) { const b = img.src.split('?')[0]; img.src = b + '?v=' + Date.now(); } }", img_selectors[0])
                 
                 page.wait_for_timeout(2500)
 
             if not captcha_bytes:
+                # If we're stuck, try one "Hard Refresh" of the page as a last resort
+                if attempt == max_retries - 1:
+                    print("      [Captcha] Persistent stuck image. Triggering page reload...")
+                    return "RELOAD"
                 continue
 
+            # Image processing and OCR
             os.makedirs("screenshots", exist_ok=True)
-            with open(f"screenshots/captcha_attempt_{attempt}.png", "wb") as f:
+            with open(f"screenshots/captcha_raw_{attempt}.png", "wb") as f:
                 f.write(captcha_bytes)
 
             img = Image.open(io.BytesIO(captcha_bytes)).convert('L')
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
-
-            enhancements = [
-                img,
-                img3x,
-                ImageEnhance.Contrast(img3x).enhance(2.0),
+            
+            # Multiple preprocessing paths to catch all digits
+            paths = [
+                # Path 1: Median Denoise (good for grid)
+                img3x.filter(ImageFilter.MedianFilter(size=3)),
+                # Path 2: Contrast + Sharpness
+                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
+                # Path 3: Aggressive Binary
                 img3x.point(lambda p: 255 if p > 128 else 0),
-                ImageOps.invert(img3x.point(lambda p: 255 if p > 128 else 0)),
+                # Path 4: Light Binary
+                img3x.point(lambda p: 255 if p > 180 else 0)
             ]
 
             best_code = None
-            for e_img in enhancements:
-                buf = io.BytesIO()
-                e_img.save(buf, format='PNG')
-                results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=1)
-                all_digits = "".join(re.findall(r'\d', "".join(r[1] for r in results)))
-                if results:
-                    print(f"      [Captcha] OCR Raw: {[r[1] for r in results]} -> '{all_digits}'")
-                if len(all_digits) == 5:
-                    best_code = all_digits
-                    break
+            for p_idx, p_img in enumerate(paths):
+                # Try both normal and inverted for each path
+                for inverted in [False, True]:
+                    final_img = ImageOps.invert(p_img) if inverted else p_img
+                    buf = io.BytesIO()
+                    final_img.save(buf, format='PNG')
+                    
+                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=1)
+                    all_digits = "".join(re.findall(r'\d', "".join(r[1] for r in results)))
+                    
+                    if len(all_digits) == 5:
+                        best_code = all_digits
+                        break
+                if best_code: break
             
             if best_code:
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            # If no 5-digit code, trigger JS refresh for next attempt
-            page.evaluate("(sel) => { const img = document.querySelector(sel); if(img) img.src = img.src.split('?')[0] + '?v=' + Date.now(); }", selectors[0])
+            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
+            # Trigger refresh for next attempt
             page.wait_for_timeout(1000)
+            for r_sel in refresh_selectors:
+                try:
+                    btn = page.locator(r_sel).first
+                    if btn.is_visible(timeout=500):
+                        btn.click(force=True)
+                        break
+                except: continue
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -439,25 +474,29 @@ def run_automation_logic(page, reader, unchecked_companies):
                     
                     # Try solving captcha (up to 3 times per account check)
                     print(f"      Solving Captcha...")
-                    for cap_attempt in range(3):
+                    need_reload = False
+                    for cap_attempt in range(4):
                         cap = solve_captcha(page, reader)
+                        if cap == "RELOAD":
+                            need_reload = True
+                            break
                         if not cap: continue
                         
                         # Use JS fill to bypass WAF iframe interception on input fields
                         page.evaluate(f"""() => {{
-                            const el = document.querySelector('#captcha');
+                            const el = document.querySelector('#captcha') || document.querySelector('#userCaptcha') || document.querySelector('input[name="captcha"]');
                             if (el) {{
                                 el.value = '{cap}';
                                 el.dispatchEvent(new Event('input', {{bubbles: true}}));
                                 el.dispatchEvent(new Event('change', {{bubbles: true}}));
                             }}
                         }}""")
-                        page.wait_for_timeout(300)
+                        page.wait_for_timeout(500)
                         
                         # Submit via smart_click which uses coordinate-based mouse click
                         smart_click("button:has-text('View Result')")
                             
-                        page.wait_for_timeout(2500)
+                        page.wait_for_timeout(3000)
                         
                         res = page.evaluate("""
                             () => {
@@ -474,6 +513,11 @@ def run_automation_logic(page, reader, unchecked_companies):
                             continue
                         
                         if res == "Pending|No result found.":
+                            # Check for WAF rejection in sub-frame or page
+                            if "rejected" in page.title().lower() or "Request Rejected" in page.content():
+                                print("      [Check] WAF Blocked during check. Reloading page...")
+                                need_reload = True
+                                break
                             print(f"      [Check] No result found (possible timeout or site delay).")
                             continue
 
@@ -484,6 +528,14 @@ def run_automation_logic(page, reader, unchecked_companies):
                             save_result_to_db(account, m['db'], status, feedback)
                             send_push_notification(account.get('TOKENS'), username, f"{m['cdsc']}: {status} - {feedback}")
                         break
+                    
+                    if need_reload:
+                        # Break this account loop to reload and retry
+                        page.goto(url, wait_until='networkidle')
+                        page.wait_for_timeout(3000)
+                        # Actually we should probably continue to re-enter BOID etc.
+                        # The simplest way is to just let the loop continue and it will re-enter data
+                        continue
                 except Exception as e:
                     print(f"     Error for {username}: {e}")
 
