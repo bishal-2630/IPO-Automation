@@ -71,7 +71,7 @@ jobs:
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
           RUN_MODE: "check_status"
           HEADLESS: "true"
-        run: python ipo_result.py
+        run: python -u ipo_result.py
 
       - name: Upload Debug Screenshots
         if: always()

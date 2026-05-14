@@ -147,7 +147,7 @@ def get_unchecked_accounts_for_company(company_name):
         return [acc for acc in accounts if acc.get('ID') not in checked_ids]
     except: return accounts
 
-def solve_captcha(page, reader, max_retries=5):
+def solve_captcha(page, reader, max_retries=3):
     for attempt in range(max_retries):
         try:
             captcha_img = page.locator("img[src*='captcha'], .captcha-image img").first
@@ -339,13 +339,15 @@ def run_status_check():
                         page.keyboard.press("Enter")
                         
                         # BOID with human-like typing
+                        print(f"      Typing BOID...")
                         smart_click("input#boid")
                         page.keyboard.press("Control+A")
                         page.keyboard.press("Backspace")
                         page.keyboard.type(boid, delay=random.randint(80, 150))
                         
-                        # Try solving captcha (up to 5 times per account check)
-                        for cap_attempt in range(5):
+                        # Try solving captcha (up to 3 times per account check)
+                        print(f"      Solving Captcha...")
+                        for cap_attempt in range(3):
                             cap = solve_captcha(page, reader)
                             if not cap: continue
                             
