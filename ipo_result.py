@@ -332,38 +332,50 @@ def run_automation_logic(page, reader, unchecked_companies):
     try:
         # Read all companies from CDSC dropdown
         all_cdsc_companies = []
-        for attempt in range(3):
+        print("  Opening company dropdown...")
+        for attempt in range(5): # More attempts for slow proxies
             page.locator("ng-select").first.click()
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(3000) # Wait longer for list to populate
+            
             all_cdsc_companies = page.evaluate("""
                 () => Array.from(document.querySelectorAll('.ng-option, ng-dropdown-panel .ng-option'))
                      .map(o => o.innerText.trim())
                      .filter(t => t.length > 3)
             """)
-            if all_cdsc_companies:
+            
+            if len(all_cdsc_companies) > 5: # Real list is large
                 break
+            
+            print(f"    Dropdown has only {len(all_cdsc_companies)} items. Retrying ({attempt+1}/5)...")
             page.keyboard.press("Escape")
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2000)
         
         if not all_cdsc_companies:
             print("[Error] Could not read company list from CDSC portal.")
             return
 
         print(f"  Found {len(all_cdsc_companies)} companies on CDSC portal.")
+        if len(all_cdsc_companies) <= 5:
+            print(f"  [Debug] Found companies: {all_cdsc_companies}")
 
         # Match unchecked companies with CDSC portal names
-        def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').replace('ltd.', 'ltd').strip().lower()
+        def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').replace('ltd.', 'ltd').replace('company', '').replace('hydropower', 'hp').strip()
+        
         matches = []
         for c_name in all_cdsc_companies:
             c_norm = norm(c_name)
             for db_name in unchecked_companies:
                 db_norm = norm(db_name)
-                if c_norm in db_norm or db_norm in c_norm:
+                # Fuzzy match: check if one contains the other or vice versa
+                if c_norm in db_norm or db_norm in c_norm or c_norm.replace(' ', '') in db_norm.replace(' ', ''):
                     matches.append({'cdsc': c_name, 'db': db_name})
                     break
         
         if not matches:
-            print(f" Found {len(unchecked_companies)} unchecked companies in DB, but none match the current CDSC results list.")
+            print(f"  No matching companies found. (Checked {len(unchecked_companies)} in DB vs {len(all_cdsc_companies)} on portal)")
+            # Print a few examples for debugging
+            print(f"  [Match Debug] CDSC Sample: {all_cdsc_companies[:3]}")
+            print(f"  [Match Debug] DB Sample: {unchecked_companies[:3]}")
             return
 
         print(f"Starting smart check for {len(matches)} matched companies...")
