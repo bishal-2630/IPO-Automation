@@ -16,6 +16,19 @@ try:
 except ImportError:
     pass
 
+try:
+    from playwright_stealth import stealth_sync
+    HAS_STEALTH = True
+except ImportError:
+    try:
+        from playwright_stealth import Stealth as _Stealth
+        def stealth_sync(page):
+            _Stealth().apply_stealth_sync(page)
+        HAS_STEALTH = True
+    except ImportError:
+        stealth_sync = None
+        HAS_STEALTH = False
+
 # Load environment variables
 load_dotenv()
 

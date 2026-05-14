@@ -62,7 +62,7 @@ jobs:
 
           echo "--- VERIFICATION ---"
           python -c "import easyocr; print('SUCCESS: easyocr ready')"
-          python -c "from playwright_stealth import stealth_sync; print('SUCCESS: playwright-stealth ready')"
+          python -c "import playwright_stealth; print('SUCCESS: playwright-stealth ready:', playwright_stealth.__version__ if hasattr(playwright_stealth, '__version__') else 'unknown')"
 
       - name: Run IPO Result Check
         env:
