@@ -300,18 +300,15 @@ def run_status_check():
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
-        launch_kwargs = {
-            "headless": os.environ.get("HEADLESS", "true").lower() != "false",
-            "channel": "chrome",
-            "ignore_default_args": ["--enable-automation"],
-            "args": [
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
         # Stealth: Proxy and User-Agent randomization
         proxy = os.getenv('PROXY_URL')
-        launch_args = ["--disable-blink-features=AutomationControlled"]
+        launch_args = [
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+        ]
+        
         if proxy:
             print(f"  Using Proxy: {proxy.split('@')[-1]}")
             browser = p.chromium.launch(headless=True, args=launch_args, proxy={"server": proxy})
