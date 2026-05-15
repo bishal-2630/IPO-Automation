@@ -186,8 +186,8 @@ def solve_captcha(page, reader, max_retries=3):
             # 1. Capture and wait for a real, fresh image
             captcha_bytes = None
             for refresh_attempt in range(4):
-                # Increased wait for slow GH runners / WAF decoding
-                page.wait_for_timeout(2500)
+                # Small wait for animation/load
+                page.wait_for_timeout(1000)
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
@@ -201,30 +201,38 @@ def solve_captcha(page, reader, max_retries=3):
                 white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
                 
                 # If it's a valid image (not all white) and (first time OR changed from last)
-                if white_ratio < 0.96 and (last_hash is None or current_hash != last_hash):
-                    # Take one more screenshot after 1s to ensure it's stable
-                    page.wait_for_timeout(1000)
-                    stable_raw = captcha_img.screenshot()
-                    stable_hash = hashlib.md5(stable_raw).hexdigest()
-                    
-                    if stable_hash == current_hash:
-                        captcha_bytes = raw
-                        last_hash = current_hash
-                        break
+                # If it's a valid image (not all white) and (first time OR changed from last)
+                if white_ratio < 0.98 and (last_hash is None or current_hash != last_hash):
+                    captcha_bytes = raw
+                    last_hash = current_hash
+                    break
                 
                 # If image is completely white or not loading, it's a sign of a broken state/WAF block
-                if white_ratio > 0.99 and refresh_attempt > 0:
-                    print(f"      [Captcha] Blank image detected (white={white_ratio:.2f}).")
-                    if refresh_attempt >= 2:
+                if white_ratio > 0.99 and refresh_attempt > 1:
+                    print(f"      [Captcha] Blank image detected (white={white_ratio:.2f}). Cooling down...")
+                    page.wait_for_timeout(5000) # Wait 5 seconds before giving up or reloading
+                    if refresh_attempt == 3:
                         return "RELOAD"
 
                 print(f"      [Captcha] Refresh needed (white={white_ratio:.2f}, same={current_hash == last_hash}). Attempt {refresh_attempt+1}...")
                 
-                # NO BUTTON CLICKS - Just wait or reload the whole page
-                page.wait_for_timeout(3000)
-                if refresh_attempt > 1:
-                    print("      [Captcha] Image still blank. Refreshing page...")
-                    return "RELOAD"
+                # Try clicking refresh button with a human-like delay
+                page.wait_for_timeout(random.randint(1500, 3000))
+                refreshed = False
+                for r_sel in refresh_selectors:
+                    try:
+                        btn = page.locator(r_sel).first
+                        if btn.is_visible(timeout=500):
+                            btn.click(force=True)
+                            refreshed = True
+                            break
+                    except: continue
+                
+                if not refreshed:
+                    # Fallback: JS refresh
+                    page.evaluate("(sel) => { const img = document.querySelector(sel); if(img) { const b = img.src.split('?')[0]; img.src = b + '?v=' + Date.now(); } }", img_selectors[0])
+                
+                page.wait_for_timeout(2500)
 
             if not captcha_bytes:
                 # If we're stuck, try one "Hard Refresh" of the page as a last resort
@@ -242,16 +250,16 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Advanced preprocessing to remove CDSC grid
+            # Multiple preprocessing paths to catch all digits
             paths = [
-                # Path 1: Strong Median Filter to wipe out the grid
+                # Path 1: Median Denoise (good for grid)
                 img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: Contrast Boost + Sharpness
-                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.5)).enhance(2.0),
-                # Path 3: Aggressive Binary (Black & White only)
-                img3x.point(lambda p: 0 if p < 140 else 255),
-                # Path 4: Denoised Binary
-                img3x.filter(ImageFilter.MedianFilter(size=3)).point(lambda p: 0 if p < 160 else 255)
+                # Path 2: Contrast + Sharpness
+                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
+                # Path 3: Aggressive Binary
+                img3x.point(lambda p: 255 if p > 128 else 0),
+                # Path 4: Light Binary
+                img3x.point(lambda p: 255 if p > 180 else 0)
             ]
 
             best_code = None
@@ -274,8 +282,16 @@ def solve_captcha(page, reader, max_retries=3):
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            print(f"      [Captcha] OCR failed. Found: '{all_digits}'. Triggering Page Reload to avoid WAF button block...")
-            return "RELOAD"
+            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
+            # Trigger refresh for next attempt
+            page.wait_for_timeout(1000)
+            for r_sel in refresh_selectors:
+                try:
+                    btn = page.locator(r_sel).first
+                    if btn.is_visible(timeout=500):
+                        btn.click(force=True)
+                        break
+                except: continue
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -313,11 +329,7 @@ def run_status_check():
         try:
             browser = p.chromium.launch(**launch_kwargs)
             
-            # Use environment-aware User-Agent to bypass WAF fingerprinting
-            if os.environ.get("GITHUB_ACTIONS") or os.name != 'nt':
-                user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            else:
-                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             
             context = browser.new_context(
                 viewport={"width": 1366, "height": 768},
@@ -383,15 +395,11 @@ def run_status_check():
 def run_automation_logic(page, reader, unchecked_companies):
     url = "https://iporesult.cdsc.com.np/"
     try:
-        # 0. Wait for WAF Challenge to settle
-        print("  Waiting for security check...")
-        page.wait_for_timeout(random.randint(5000, 8000))
-        
         # Read all companies from CDSC dropdown
         all_cdsc_companies = []
         print("  Opening company dropdown...")
         for attempt in range(5):
-            smart_click("ng-select")
+            page.locator("ng-select").first.click()
             page.wait_for_timeout(3000)
             
             all_cdsc_companies = page.evaluate("""
@@ -454,20 +462,18 @@ def run_automation_logic(page, reader, unchecked_companies):
                     
                     def smart_click(selector):
                         try:
-                            # 1. Wait and try physical click
                             el = page.locator(selector).first
-                            el.wait_for(state="visible", timeout=5000)
-                            el.click(force=True, timeout=3000)
+                            el.wait_for(state="visible", timeout=10000)
+                            box = el.bounding_box()
+                            if box:
+                                page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                el.click(force=True, timeout=2000)
+                            else:
+                                el.click(force=True)
                         except:
-                            try:
-                                # 2. Fallback: JavaScript Dispatch (Bypasses Iframe interception)
-                                print(f"      [Stealth] Using JS click for {selector}")
-                                page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new Event('click', {{bubbles: true}}))")
-                            except:
-                                try:
-                                    # 3. Last resort: JS click()
-                                    page.evaluate(f"document.querySelector('{selector}').click()")
-                                except: pass
+                            try: page.locator(selector).first.click(force=True)
+                            except: pass
 
                     # Selection
                     smart_click(".ng-select-container")
