@@ -382,12 +382,15 @@ def run_status_check():
 
 def run_automation_logic(page, reader, unchecked_companies):
     url = "https://iporesult.cdsc.com.np/"
-    try:
+        # 0. Wait for WAF Challenge to settle
+        print("  Waiting for security check...")
+        page.wait_for_timeout(random.randint(5000, 8000))
+        
         # Read all companies from CDSC dropdown
         all_cdsc_companies = []
         print("  Opening company dropdown...")
         for attempt in range(5):
-            page.locator("ng-select").first.click()
+            smart_click("ng-select")
             page.wait_for_timeout(3000)
             
             all_cdsc_companies = page.evaluate("""
@@ -450,18 +453,20 @@ def run_automation_logic(page, reader, unchecked_companies):
                     
                     def smart_click(selector):
                         try:
+                            # 1. Wait and try physical click
                             el = page.locator(selector).first
-                            el.wait_for(state="visible", timeout=10000)
-                            box = el.bounding_box()
-                            if box:
-                                page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                el.click(force=True, timeout=2000)
-                            else:
-                                el.click(force=True)
+                            el.wait_for(state="visible", timeout=5000)
+                            el.click(force=True, timeout=3000)
                         except:
-                            try: page.locator(selector).first.click(force=True)
-                            except: pass
+                            try:
+                                # 2. Fallback: JavaScript Dispatch (Bypasses Iframe interception)
+                                print(f"      [Stealth] Using JS click for {selector}")
+                                page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new Event('click', {{bubbles: true}}))")
+                            except:
+                                try:
+                                    # 3. Last resort: JS click()
+                                    page.evaluate(f"document.querySelector('{selector}').click()")
+                                except: pass
 
                     # Selection
                     smart_click(".ng-select-container")
