@@ -185,8 +185,8 @@ def solve_captcha(page, reader, max_retries=3):
             # 1. Capture and wait for a real, fresh image
             captcha_bytes = None
             for refresh_attempt in range(4):
-                # Small wait for animation/load
-                page.wait_for_timeout(1000)
+                # Increased wait for slow GH runners / WAF decoding
+                page.wait_for_timeout(3000)
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
@@ -371,8 +371,28 @@ def run_automation_logic(page, reader, unchecked_companies):
         # Read all companies from CDSC dropdown
         all_cdsc_companies = []
         print("  Opening company dropdown...")
+        
+        def smart_click(selector):
+            try:
+                # 1. Check for WAF block before action
+                if "Rejected" in page.content():
+                    raise Exception("IP Blocked by Firewall")
+
+                # 2. Focus + Keyboard Enter (Bypasses Click Interception)
+                el = page.locator(selector).first
+                el.wait_for(state="visible", timeout=5000)
+                el.focus()
+                page.keyboard.press("Enter")
+                
+                # 3. JS Dispatch fallback
+                page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new Event('click', {{bubbles: true}}))")
+            except Exception as e:
+                if "Blocked" in str(e): raise e
+                try: page.evaluate(f"document.querySelector('{selector}').click()")
+                except: pass
+
         for attempt in range(5):
-            page.locator("ng-select").first.click()
+            smart_click("ng-select")
             page.wait_for_timeout(3000)
             
             all_cdsc_companies = page.evaluate("""
@@ -427,24 +447,7 @@ def run_automation_logic(page, reader, unchecked_companies):
                 try:
                     print(f"   [{username}] Checking...")
                     
-                    def smart_click(selector):
-                        try:
-                            # 1. Check for WAF block before action
-                            if "Rejected" in page.content():
-                                raise Exception("IP Blocked by Firewall")
-
-                            # 2. Focus + Keyboard Enter (Bypasses Click Interception)
-                            el = page.locator(selector).first
-                            el.wait_for(state="visible", timeout=5000)
-                            el.focus()
-                            page.keyboard.press("Enter")
-                            
-                            # 3. JS Dispatch fallback
-                            page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new Event('click', {{bubbles: true}}))")
-                        except Exception as e:
-                            if "Blocked" in str(e): raise e
-                            try: page.evaluate(f"document.querySelector('{selector}').click()")
-                            except: pass
+                    # No nested definition needed anymore
 
                     # Selection
                     smart_click(".ng-select-container")
