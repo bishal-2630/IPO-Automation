@@ -185,8 +185,8 @@ def solve_captcha(page, reader, max_retries=3):
             # 1. Capture and wait for a real, fresh image
             captcha_bytes = None
             for refresh_attempt in range(4):
-                # Increased wait for slow GH runners / WAF decoding
-                page.wait_for_timeout(2500)
+                # Small wait for animation/load
+                page.wait_for_timeout(1000)
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
@@ -205,14 +205,30 @@ def solve_captcha(page, reader, max_retries=3):
                     last_hash = current_hash
                     break
                 
-                # If image is completely white or not loading, it's a sign of a broken state/WAF block
-                if white_ratio > 0.99 and refresh_attempt > 0:
-                    print(f"      [Captcha] Blank image detected (white={white_ratio:.2f}). Reloading page...")
+                # If image is completely white, it's a sign of a broken state/WAF block
+                if white_ratio > 0.99 and refresh_attempt > 1:
+                    print("      [Captcha] Blank image detected. Force reloading page...")
                     return "RELOAD"
 
-                # NO BUTTON CLICKS - They trigger WAF. Reloading page instead.
-                print("      [Captcha] Image needs update. Reloading page...")
-                return "RELOAD"
+                print(f"      [Captcha] Refresh needed (white={white_ratio:.2f}, same={current_hash == last_hash}). Attempt {refresh_attempt+1}...")
+                
+                # Try clicking refresh button with a human-like delay
+                page.wait_for_timeout(random.randint(1500, 3000))
+                refreshed = False
+                for r_sel in refresh_selectors:
+                    try:
+                        btn = page.locator(r_sel).first
+                        if btn.is_visible(timeout=500):
+                            btn.click(force=True)
+                            refreshed = True
+                            break
+                    except: continue
+                
+                if not refreshed:
+                    # Fallback: JS refresh
+                    page.evaluate("(sel) => { const img = document.querySelector(sel); if(img) { const b = img.src.split('?')[0]; img.src = b + '?v=' + Date.now(); } }", img_selectors[0])
+                
+                page.wait_for_timeout(2500)
 
             if not captcha_bytes:
                 # If we're stuck, try one "Hard Refresh" of the page as a last resort
@@ -230,14 +246,16 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Improved preprocessing to remove CDSC grid
+            # Multiple preprocessing paths to catch all digits
             paths = [
-                # Path 1: Median Denoise (wipes out grid lines)
+                # Path 1: Median Denoise (good for grid)
                 img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: High Contrast (makes digits bolder)
-                ImageEnhance.Contrast(ImageEnhance.Sharpness(img3x).enhance(2.0)).enhance(2.0),
+                # Path 2: Contrast + Sharpness
+                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
                 # Path 3: Aggressive Binary
-                img3x.point(lambda p: 255 if p > 140 else 0),
+                img3x.point(lambda p: 255 if p > 128 else 0),
+                # Path 4: Light Binary
+                img3x.point(lambda p: 255 if p > 180 else 0)
             ]
 
             best_code = None
@@ -260,8 +278,16 @@ def solve_captcha(page, reader, max_retries=3):
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            print(f"      [Captcha] OCR failed. Found: '{all_digits}'. Reloading page to try fresh...")
-            return "RELOAD"
+            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
+            # Trigger refresh for next attempt
+            page.wait_for_timeout(1000)
+            for r_sel in refresh_selectors:
+                try:
+                    btn = page.locator(r_sel).first
+                    if btn.is_visible(timeout=500):
+                        btn.click(force=True)
+                        break
+                except: continue
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
