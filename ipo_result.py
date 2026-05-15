@@ -159,7 +159,6 @@ def solve_captcha(page, reader, max_retries=3):
     
     # Updated refresh selectors based on browser subagent findings
     refresh_selectors = [
-        "button.btn:nth-of-type(2)", # More specific selector for the reload button
         "button.btn:last-child",
         "button[title='Reload Captcha']", 
         "button:has(.fa-refresh)", 
@@ -201,18 +200,15 @@ def solve_captcha(page, reader, max_retries=3):
                 white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
                 
                 # If it's a valid image (not all white) and (first time OR changed from last)
-                # If it's a valid image (not all white) and (first time OR changed from last)
-                if white_ratio < 0.98 and (last_hash is None or current_hash != last_hash):
+                if white_ratio < 0.95 and (last_hash is None or current_hash != last_hash):
                     captcha_bytes = raw
                     last_hash = current_hash
                     break
                 
-                # If image is completely white or not loading, it's a sign of a broken state/WAF block
+                # If image is completely white, it's a sign of a broken state/WAF block
                 if white_ratio > 0.99 and refresh_attempt > 1:
-                    print(f"      [Captcha] Blank image detected (white={white_ratio:.2f}). Cooling down...")
-                    page.wait_for_timeout(5000) # Wait 5 seconds before giving up or reloading
-                    if refresh_attempt == 3:
-                        return "RELOAD"
+                    print("      [Captcha] Blank image detected. Force reloading page...")
+                    return "RELOAD"
 
                 print(f"      [Captcha] Refresh needed (white={white_ratio:.2f}, same={current_hash == last_hash}). Attempt {refresh_attempt+1}...")
                 
@@ -328,21 +324,10 @@ def run_status_check():
 
         try:
             browser = p.chromium.launch(**launch_kwargs)
-            
-            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            
             context = browser.new_context(
                 viewport={"width": 1366, "height": 768},
                 locale="en-US",
                 timezone_id="Asia/Kathmandu",
-                user_agent=user_agent,
-                extra_http_headers={
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Sec-CH-UA": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-                    "Sec-CH-UA-Mobile": "?0",
-                    "Sec-CH-UA-Platform": '"Windows"',
-                }
             )
             page = context.new_page()
             if HAS_STEALTH and stealth_sync:
@@ -352,26 +337,18 @@ def run_status_check():
             
             # Natural delay before starting
             print(f"  Preparing stealth session...")
-            page.wait_for_timeout(random.randint(5000, 10000))
+            page.wait_for_timeout(random.randint(3000, 6000))
 
             print(f"Navigating to {url}...")
-            # Use a realistic navigation
-            page.goto(url, wait_until='load', timeout=90000)
-            page.wait_for_timeout(3000)
-            page.wait_for_load_state('networkidle')
+            page.goto(url, wait_until='networkidle', timeout=90000)
             
             # Check for WAF rejection
             body_text = page.inner_text("body")
             page_title = page.title()
             print(f"  Page Title: {page_title}")
             
-            if "requested URL was rejected" in body_text.lower() or "request rejected" in body_text.lower() or "rejected" in page_title.lower() or "support id" in body_text.lower():
+            if "requested URL was rejected" in body_text or "Request Rejected" in body_text or "rejected" in page_title.lower():
                 print(f"[CRITICAL] WAF blocked the request. Title: {page_title}.")
-                # Try to extract support ID
-                match = re.search(r"support ID is: <(\d+)>", body_text, re.I)
-                if match:
-                    print(f"  [WAF] Support ID: {match.group(1)}")
-                
                 # Save screenshot for debugging
                 os.makedirs("screenshots", exist_ok=True)
                 page.screenshot(path="screenshots/waf_block.png")
@@ -451,12 +428,6 @@ def run_automation_logic(page, reader, unchecked_companies):
                 boid = account.get('BOID')
                 if not boid: continue
                 
-                # Randomized delay between accounts to avoid WAF detection
-                if account != target_accounts[0]:
-                    wait_time = random.randint(5000, 10000)
-                    print(f"   [Wait] Sleeping {wait_time/1000:.1f}s to avoid detection...")
-                    page.wait_for_timeout(wait_time)
-
                 try:
                     print(f"   [{username}] Checking...")
                     
@@ -478,10 +449,7 @@ def run_automation_logic(page, reader, unchecked_companies):
                     # Selection
                     smart_click(".ng-select-container")
                     page.wait_for_timeout(500)
-                    page.wait_for_timeout(random.randint(600, 1200))
-                    for char in m['cdsc']:
-                        page.keyboard.type(char)
-                        page.wait_for_timeout(random.randint(50, 150))
+                    page.keyboard.type(m['cdsc'], delay=80)
                     page.wait_for_timeout(800)
                     page.keyboard.press("Enter")
                     
@@ -548,10 +516,8 @@ def run_automation_logic(page, reader, unchecked_companies):
                         break
                     
                     if need_reload:
-                        print("      [Action] WAF or Block detected. Cooling down for 30s...")
-                        page.wait_for_timeout(30000)
                         page.goto(url, wait_until='networkidle')
-                        page.wait_for_timeout(5000)
+                        page.wait_for_timeout(3000)
                         continue
                 except Exception as e:
                     print(f"     Error for {username}: {e}")
