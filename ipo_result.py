@@ -186,8 +186,8 @@ def solve_captcha(page, reader, max_retries=3):
             # 1. Capture and wait for a real, fresh image
             captcha_bytes = None
             for refresh_attempt in range(4):
-                # Small wait for animation/load
-                page.wait_for_timeout(1000)
+                # Increased wait for slow GH runners / WAF decoding
+                page.wait_for_timeout(2500)
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
@@ -329,7 +329,11 @@ def run_status_check():
         try:
             browser = p.chromium.launch(**launch_kwargs)
             
-            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            # Use environment-aware User-Agent to bypass WAF fingerprinting
+            if os.environ.get("GITHUB_ACTIONS") or os.name != 'nt':
+                user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            else:
+                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             
             context = browser.new_context(
                 viewport={"width": 1366, "height": 768},
