@@ -185,8 +185,8 @@ def solve_captcha(page, reader, max_retries=3):
             # 1. Capture and wait for a real, fresh image
             captcha_bytes = None
             for refresh_attempt in range(4):
-                # Small wait for animation/load
-                page.wait_for_timeout(1000)
+                # Increased wait for slow GH runners / WAF decoding
+                page.wait_for_timeout(2500)
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
@@ -246,16 +246,16 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Multiple preprocessing paths to catch all digits
+            # Advanced preprocessing to remove CDSC grid
             paths = [
-                # Path 1: Median Denoise (good for grid)
+                # Path 1: Strong Median Filter (Grid-Killer)
                 img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: Contrast + Sharpness
-                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
-                # Path 3: Aggressive Binary
-                img3x.point(lambda p: 255 if p > 128 else 0),
-                # Path 4: Light Binary
-                img3x.point(lambda p: 255 if p > 180 else 0)
+                # Path 2: Median + High Contrast
+                ImageEnhance.Contrast(img3x.filter(ImageFilter.MedianFilter(size=3))).enhance(2.5),
+                # Path 3: Aggressive Binary (Threshold 140)
+                img3x.filter(ImageFilter.MedianFilter(size=3)).point(lambda p: 0 if p < 140 else 255),
+                # Path 4: Aggressive Binary (Threshold 160)
+                img3x.filter(ImageFilter.MedianFilter(size=3)).point(lambda p: 0 if p < 160 else 255)
             ]
 
             best_code = None
