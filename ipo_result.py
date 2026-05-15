@@ -186,7 +186,7 @@ def solve_captcha(page, reader, max_retries=3):
             captcha_bytes = None
             for refresh_attempt in range(4):
                 # Increased wait for slow GH runners / WAF decoding
-                page.wait_for_timeout(2500)
+                page.wait_for_timeout(3000)
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
@@ -246,14 +246,14 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Advanced preprocessing to remove CDSC grid
+            # Improved preprocessing to remove CDSC grid
             paths = [
-                # Path 1: Strong Median Filter (Grid-Killer)
+                # Path 1: Median Denoise (wipes out grid lines)
                 img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: Median + High Contrast
-                ImageEnhance.Contrast(img3x.filter(ImageFilter.MedianFilter(size=3))).enhance(2.5),
-                # Path 3: Aggressive Binary (Threshold 140)
-                img3x.filter(ImageFilter.MedianFilter(size=3)).point(lambda p: 0 if p < 140 else 255),
+                # Path 2: High Contrast (makes digits bolder)
+                ImageEnhance.Contrast(img3x).enhance(2.5),
+                # Path 3: Aggressive Binary
+                img3x.filter(ImageFilter.MedianFilter(size=3)).point(lambda p: 255 if p > 140 else 0),
                 # Path 4: Aggressive Binary (Threshold 160)
                 img3x.filter(ImageFilter.MedianFilter(size=3)).point(lambda p: 0 if p < 160 else 255)
             ]
@@ -433,18 +433,22 @@ def run_automation_logic(page, reader, unchecked_companies):
                     
                     def smart_click(selector):
                         try:
+                            # 1. Try physical click
                             el = page.locator(selector).first
-                            el.wait_for(state="visible", timeout=10000)
-                            box = el.bounding_box()
-                            if box:
-                                page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                el.click(force=True, timeout=2000)
-                            else:
-                                el.click(force=True)
+                            el.wait_for(state="visible", timeout=3000)
+                            el.click(force=True, timeout=2000)
                         except:
-                            try: page.locator(selector).first.click(force=True)
-                            except: pass
+                            try:
+                                # 2. Fallback: Focus + Keyboard Enter (Bypasses most click-interception iframes)
+                                print(f"      [Stealth] Using Keyboard Focus for {selector}")
+                                el = page.locator(selector).first
+                                el.focus()
+                                page.keyboard.press("Enter")
+                            except:
+                                try:
+                                    # 3. Fallback: JavaScript Dispatch
+                                    page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new Event('click', {{bubbles: true}}))")
+                                except: pass
 
                     # Selection
                     smart_click(".ng-select-container")
