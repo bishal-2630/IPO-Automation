@@ -382,6 +382,7 @@ def run_status_check():
 
 def run_automation_logic(page, reader, unchecked_companies):
     url = "https://iporesult.cdsc.com.np/"
+    try:
         # 0. Wait for WAF Challenge to settle
         print("  Waiting for security check...")
         page.wait_for_timeout(random.randint(5000, 8000))
