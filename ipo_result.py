@@ -185,8 +185,8 @@ def solve_captcha(page, reader, max_retries=3):
             # 1. Capture and wait for a real, fresh image
             captcha_bytes = None
             for refresh_attempt in range(4):
-                # Small wait for animation/load
-                page.wait_for_timeout(1000)
+                # Wait longer for slow GH runners / WAF checks
+                page.wait_for_timeout(3000)
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
@@ -212,23 +212,9 @@ def solve_captcha(page, reader, max_retries=3):
 
                 print(f"      [Captcha] Refresh needed (white={white_ratio:.2f}, same={current_hash == last_hash}). Attempt {refresh_attempt+1}...")
                 
-                # Try clicking refresh button with a human-like delay
-                page.wait_for_timeout(random.randint(1500, 3000))
-                refreshed = False
-                for r_sel in refresh_selectors:
-                    try:
-                        btn = page.locator(r_sel).first
-                        if btn.is_visible(timeout=500):
-                            btn.click(force=True)
-                            refreshed = True
-                            break
-                    except: continue
-                
-                if not refreshed:
-                    # Fallback: JS refresh
-                    page.evaluate("(sel) => { const img = document.querySelector(sel); if(img) { const b = img.src.split('?')[0]; img.src = b + '?v=' + Date.now(); } }", img_selectors[0])
-                
-                page.wait_for_timeout(2500)
+                # NO BUTTON CLICKS - They trigger WAF blocks.
+                print("      [Captcha] Needs update. Reloading page...")
+                return "RELOAD"
 
             if not captcha_bytes:
                 # If we're stuck, try one "Hard Refresh" of the page as a last resort
@@ -246,48 +232,41 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Multiple preprocessing paths to catch all digits
-            paths = [
-                # Path 1: Median Denoise (good for grid)
-                img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: Contrast + Sharpness
-                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
-                # Path 3: Aggressive Binary
-                img3x.point(lambda p: 255 if p > 128 else 0),
-                # Path 4: Light Binary
-                img3x.point(lambda p: 255 if p > 180 else 0)
-            ]
-
-            best_code = None
-            for p_idx, p_img in enumerate(paths):
-                # Try both normal and inverted for each path
-                for inverted in [False, True]:
-                    final_img = ImageOps.invert(p_img) if inverted else p_img
-                    buf = io.BytesIO()
-                    final_img.save(buf, format='PNG')
-                    
-                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=1)
-                    all_digits = "".join(re.findall(r'\d', "".join(r[1] for r in results)))
-                    
-                    if len(all_digits) == 5:
-                        best_code = all_digits
-                        break
-                if best_code: break
+            # Digit Segmentation Logic: Slice the image into 5 parts
+            # This prevents the background grid from confusing the whole sequence
+            best_code = ""
+            for i in range(5):
+                # Calculate coordinates for each of the 5 digits
+                left = (w * 3 / 5) * i
+                right = (w * 3 / 5) * (i + 1)
+                digit_crop = img3x.crop((left, 0, right, h * 3))
+                
+                # Clean the single digit
+                digit_clean = digit_crop.filter(ImageFilter.MedianFilter(size=3))
+                digit_clean = ImageEnhance.Contrast(digit_clean).enhance(2.5)
+                
+                # Convert to bytes for EasyOCR
+                buf = io.BytesIO()
+                digit_clean.save(buf, format='PNG')
+                
+                # Read single digit
+                res = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
+                digit = "".join(re.findall(r'\d', "".join(res)))
+                if digit:
+                    best_code += digit[0] # Take the first digit found in the segment
+                else:
+                    # Fallback: try inverted
+                    res_inv = reader.readtext(ImageOps.invert(digit_clean), allowlist='0123456789', detail=0)
+                    digit_inv = "".join(re.findall(r'\d', "".join(res_inv)))
+                    if digit_inv: best_code += digit_inv[0]
+                    else: best_code += "?" # Placeholder for failure
             
-            if best_code:
-                print(f"      [Captcha] Solved: {best_code}")
+            if len(best_code) == 5 and "?" not in best_code:
+                print(f"      [Captcha] Segmented Solve: {best_code}")
                 return best_code
 
-            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
-            # Trigger refresh for next attempt
-            page.wait_for_timeout(1000)
-            for r_sel in refresh_selectors:
-                try:
-                    btn = page.locator(r_sel).first
-                    if btn.is_visible(timeout=500):
-                        btn.click(force=True)
-                        break
-                except: continue
+            print(f"      [Captcha] Segmented OCR failed. Found: '{best_code}'. Reloading page...")
+            return "RELOAD"
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -433,17 +412,17 @@ def run_automation_logic(page, reader, unchecked_companies):
                     
                     def smart_click(selector):
                         try:
+                            # Use Focus + Keyboard Enter to bypass WAF click-interception
                             el = page.locator(selector).first
-                            el.wait_for(state="visible", timeout=10000)
-                            box = el.bounding_box()
-                            if box:
-                                page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                el.click(force=True, timeout=2000)
-                            else:
-                                el.click(force=True)
+                            el.wait_for(state="visible", timeout=5000)
+                            el.focus()
+                            page.keyboard.press("Enter")
+                            
+                            # Additional JS dispatch as backup
+                            page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new Event('click', {{bubbles: true}}))")
+                            print(f"      [Stealth] Keyboard/JS click for {selector}")
                         except:
-                            try: page.locator(selector).first.click(force=True)
+                            try: page.evaluate(f"document.querySelector('{selector}').click()")
                             except: pass
 
                     # Selection
