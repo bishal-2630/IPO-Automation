@@ -268,7 +268,8 @@ def solve_captcha(page, reader, max_retries=3):
                     best_code += digit[0]
                 else:
                     # Fallback: inverted
-                    res_inv = reader.readtext(ImageOps.invert(digit_clean), allowlist='0123456789', detail=0)
+                    import numpy as np
+                    res_inv = reader.readtext(np.array(ImageOps.invert(digit_clean)), allowlist='0123456789', detail=0)
                     digit_inv = "".join(re.findall(r'\d', "".join(res_inv)))
                     if digit_inv: best_code += digit_inv[0]
                     else: best_code += "?"
