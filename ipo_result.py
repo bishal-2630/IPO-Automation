@@ -206,8 +206,8 @@ def solve_captcha(page, reader, max_retries=3):
                     break
                 
                 # If image is completely white, it's a sign of a broken state/WAF block
-                if white_ratio > 0.99 and refresh_attempt > 1:
-                    print("      [Captcha] Blank image detected. Force reloading page...")
+                if white_ratio > 0.99 and refresh_attempt > 0:
+                    print("      [WAF] Blank image / Request Rejected. Reloading...")
                     return "RELOAD"
 
                 print(f"      [Captcha] Refresh needed (white={white_ratio:.2f}, same={current_hash == last_hash}). Attempt {refresh_attempt+1}...")
@@ -246,48 +246,39 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Multiple preprocessing paths to catch all digits
-            paths = [
-                # Path 1: Median Denoise (good for grid)
-                img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: Contrast + Sharpness
-                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
-                # Path 3: Aggressive Binary
-                img3x.point(lambda p: 255 if p > 128 else 0),
-                # Path 4: Light Binary
-                img3x.point(lambda p: 255 if p > 180 else 0)
-            ]
-
-            best_code = None
-            for p_idx, p_img in enumerate(paths):
-                # Try both normal and inverted for each path
-                for inverted in [False, True]:
-                    final_img = ImageOps.invert(p_img) if inverted else p_img
-                    buf = io.BytesIO()
-                    final_img.save(buf, format='PNG')
-                    
-                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=1)
-                    all_digits = "".join(re.findall(r'\d', "".join(r[1] for r in results)))
-                    
-                    if len(all_digits) == 5:
-                        best_code = all_digits
-                        break
-                if best_code: break
+            # Digit Segmentation Logic: Slice the image into 5 parts
+            # This prevents the background grid from confusing the whole sequence
+            best_code = ""
+            for i in range(5):
+                # Calculate coordinates for each of the 5 digits
+                left = (w * 3 / 5) * i
+                right = (w * 3 / 5) * (i + 1)
+                digit_crop = img3x.crop((left, 0, right, h * 3))
+                
+                # Clean the single digit (Grid-Killer)
+                digit_clean = digit_crop.filter(ImageFilter.MedianFilter(size=3))
+                digit_clean = ImageEnhance.Contrast(digit_clean).enhance(2.5)
+                
+                buf = io.BytesIO()
+                digit_clean.save(buf, format='PNG')
+                
+                res = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
+                digit = "".join(re.findall(r'\d', "".join(res)))
+                if digit:
+                    best_code += digit[0]
+                else:
+                    # Fallback: inverted
+                    res_inv = reader.readtext(ImageOps.invert(digit_clean), allowlist='0123456789', detail=0)
+                    digit_inv = "".join(re.findall(r'\d', "".join(res_inv)))
+                    if digit_inv: best_code += digit_inv[0]
+                    else: best_code += "?"
             
-            if best_code:
-                print(f"      [Captcha] Solved: {best_code}")
+            if len(best_code) == 5 and "?" not in best_code:
+                print(f"      [Captcha] Solved: {best_code} (via Segmentation)")
                 return best_code
 
-            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
-            # Trigger refresh for next attempt
-            page.wait_for_timeout(1000)
-            for r_sel in refresh_selectors:
-                try:
-                    btn = page.locator(r_sel).first
-                    if btn.is_visible(timeout=500):
-                        btn.click(force=True)
-                        break
-                except: continue
+            print(f"      [Captcha] OCR failed. Found: '{best_code}'. Reloading page...")
+            return "RELOAD"
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -318,18 +309,25 @@ def run_status_check():
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--window-size=1366,768',
-            ]
-        }
+        # Stealth: Proxy and User-Agent randomization
+        proxy = os.getenv('PROXY_URL')
+        launch_args = ["--disable-blink-features=AutomationControlled"]
+        if proxy:
+            print(f"  Using Proxy: {proxy.split('@')[-1]}")
+            browser = p.chromium.launch(headless=True, args=launch_args, proxy={"server": proxy})
+        else:
+            browser = p.chromium.launch(headless=True, args=launch_args)
+        
+        # Realistic context
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1366, "height": 768},
+            locale="en-US",
+            timezone_id="Asia/Kathmandu",
+        )
+        page = context.new_page()
 
         try:
-            browser = p.chromium.launch(**launch_kwargs)
-            context = browser.new_context(
-                viewport={"width": 1366, "height": 768},
-                locale="en-US",
-                timezone_id="Asia/Kathmandu",
-            )
-            page = context.new_page()
             if HAS_STEALTH and stealth_sync:
                 stealth_sync(page)
             
@@ -433,17 +431,21 @@ def run_automation_logic(page, reader, unchecked_companies):
                     
                     def smart_click(selector):
                         try:
+                            # 1. Check for WAF block before action
+                            if "Rejected" in page.content():
+                                raise Exception("IP Blocked by Firewall")
+
+                            # 2. Focus + Keyboard Enter (Bypasses Click Interception)
                             el = page.locator(selector).first
-                            el.wait_for(state="visible", timeout=10000)
-                            box = el.bounding_box()
-                            if box:
-                                page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                el.click(force=True, timeout=2000)
-                            else:
-                                el.click(force=True)
-                        except:
-                            try: page.locator(selector).first.click(force=True)
+                            el.wait_for(state="visible", timeout=5000)
+                            el.focus()
+                            page.keyboard.press("Enter")
+                            
+                            # 3. JS Dispatch fallback
+                            page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new Event('click', {{bubbles: true}}))")
+                        except Exception as e:
+                            if "Blocked" in str(e): raise e
+                            try: page.evaluate(f"document.querySelector('{selector}').click()")
                             except: pass
 
                     # Selection
