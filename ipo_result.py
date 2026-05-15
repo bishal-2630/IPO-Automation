@@ -201,38 +201,30 @@ def solve_captcha(page, reader, max_retries=3):
                 white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
                 
                 # If it's a valid image (not all white) and (first time OR changed from last)
-                # If it's a valid image (not all white) and (first time OR changed from last)
-                if white_ratio < 0.98 and (last_hash is None or current_hash != last_hash):
-                    captcha_bytes = raw
-                    last_hash = current_hash
-                    break
+                if white_ratio < 0.96 and (last_hash is None or current_hash != last_hash):
+                    # Take one more screenshot after 1s to ensure it's stable
+                    page.wait_for_timeout(1000)
+                    stable_raw = captcha_img.screenshot()
+                    stable_hash = hashlib.md5(stable_raw).hexdigest()
+                    
+                    if stable_hash == current_hash:
+                        captcha_bytes = raw
+                        last_hash = current_hash
+                        break
                 
                 # If image is completely white or not loading, it's a sign of a broken state/WAF block
-                if white_ratio > 0.99 and refresh_attempt > 1:
-                    print(f"      [Captcha] Blank image detected (white={white_ratio:.2f}). Cooling down...")
-                    page.wait_for_timeout(5000) # Wait 5 seconds before giving up or reloading
-                    if refresh_attempt == 3:
+                if white_ratio > 0.99 and refresh_attempt > 0:
+                    print(f"      [Captcha] Blank image detected (white={white_ratio:.2f}).")
+                    if refresh_attempt >= 2:
                         return "RELOAD"
 
                 print(f"      [Captcha] Refresh needed (white={white_ratio:.2f}, same={current_hash == last_hash}). Attempt {refresh_attempt+1}...")
                 
-                # Try clicking refresh button with a human-like delay
-                page.wait_for_timeout(random.randint(1500, 3000))
-                refreshed = False
-                for r_sel in refresh_selectors:
-                    try:
-                        btn = page.locator(r_sel).first
-                        if btn.is_visible(timeout=500):
-                            btn.click(force=True)
-                            refreshed = True
-                            break
-                    except: continue
-                
-                if not refreshed:
-                    # Fallback: JS refresh
-                    page.evaluate("(sel) => { const img = document.querySelector(sel); if(img) { const b = img.src.split('?')[0]; img.src = b + '?v=' + Date.now(); } }", img_selectors[0])
-                
-                page.wait_for_timeout(2500)
+                # NO BUTTON CLICKS - Just wait or reload the whole page
+                page.wait_for_timeout(3000)
+                if refresh_attempt > 1:
+                    print("      [Captcha] Image still blank. Refreshing page...")
+                    return "RELOAD"
 
             if not captcha_bytes:
                 # If we're stuck, try one "Hard Refresh" of the page as a last resort
@@ -250,16 +242,16 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Multiple preprocessing paths to catch all digits
+            # Advanced preprocessing to remove CDSC grid
             paths = [
-                # Path 1: Median Denoise (good for grid)
+                # Path 1: Strong Median Filter to wipe out the grid
                 img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: Contrast + Sharpness
-                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
-                # Path 3: Aggressive Binary
-                img3x.point(lambda p: 255 if p > 128 else 0),
-                # Path 4: Light Binary
-                img3x.point(lambda p: 255 if p > 180 else 0)
+                # Path 2: Contrast Boost + Sharpness
+                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.5)).enhance(2.0),
+                # Path 3: Aggressive Binary (Black & White only)
+                img3x.point(lambda p: 0 if p < 140 else 255),
+                # Path 4: Denoised Binary
+                img3x.filter(ImageFilter.MedianFilter(size=3)).point(lambda p: 0 if p < 160 else 255)
             ]
 
             best_code = None
@@ -282,16 +274,8 @@ def solve_captcha(page, reader, max_retries=3):
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
-            # Trigger refresh for next attempt
-            page.wait_for_timeout(1000)
-            for r_sel in refresh_selectors:
-                try:
-                    btn = page.locator(r_sel).first
-                    if btn.is_visible(timeout=500):
-                        btn.click(force=True)
-                        break
-                except: continue
+            print(f"      [Captcha] OCR failed. Found: '{all_digits}'. Triggering Page Reload to avoid WAF button block...")
+            return "RELOAD"
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
