@@ -185,8 +185,8 @@ def solve_captcha(page, reader, max_retries=3):
             # 1. Capture and wait for a real, fresh image
             captcha_bytes = None
             for refresh_attempt in range(4):
-                # Increased wait for slow GH runners / WAF decoding
-                page.wait_for_timeout(3000)
+                # Small wait for animation/load
+                page.wait_for_timeout(1000)
                 raw = captcha_img.screenshot()
                 current_hash = hashlib.md5(raw).hexdigest()
                 
@@ -246,16 +246,16 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Improved preprocessing to remove CDSC grid
+            # Multiple preprocessing paths to catch all digits
             paths = [
-                # Path 1: Median Denoise (wipes out grid lines)
+                # Path 1: Median Denoise (good for grid)
                 img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: High Contrast (makes digits bolder)
-                ImageEnhance.Contrast(img3x).enhance(2.5),
+                # Path 2: Contrast + Sharpness
+                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
                 # Path 3: Aggressive Binary
-                img3x.filter(ImageFilter.MedianFilter(size=3)).point(lambda p: 255 if p > 140 else 0),
-                # Path 4: Aggressive Binary (Threshold 160)
-                img3x.filter(ImageFilter.MedianFilter(size=3)).point(lambda p: 0 if p < 160 else 255)
+                img3x.point(lambda p: 255 if p > 128 else 0),
+                # Path 4: Light Binary
+                img3x.point(lambda p: 255 if p > 180 else 0)
             ]
 
             best_code = None
@@ -278,9 +278,16 @@ def solve_captcha(page, reader, max_retries=3):
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            # NEVER CLICK REFRESH - Page reload is safer
-            print(f"      [Captcha] OCR found: '{all_digits}'. Triggering Reload for fresh state...")
-            return "RELOAD"
+            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
+            # Trigger refresh for next attempt
+            page.wait_for_timeout(1000)
+            for r_sel in refresh_selectors:
+                try:
+                    btn = page.locator(r_sel).first
+                    if btn.is_visible(timeout=500):
+                        btn.click(force=True)
+                        break
+                except: continue
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -426,21 +433,17 @@ def run_automation_logic(page, reader, unchecked_companies):
                     
                     def smart_click(selector):
                         try:
-                            # 1. Focus the element (safe from pointer interception)
                             el = page.locator(selector).first
-                            el.wait_for(state="visible", timeout=5000)
-                            el.focus()
-                            
-                            # 2. Dispatch JS events (Bypasses TSBrPFrame interception)
-                            page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new MouseEvent('mousedown', {{bubbles: true, cancelable: true}}))")
-                            page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true}}))")
-                            
-                            # 3. Fallback: Keyboard Enter
-                            page.keyboard.press("Enter")
-                            print(f"      [Stealth] Dispatched JS/Keyboard click to {selector}")
-                        except Exception as e:
-                            print(f"      [Stealth] smart_click failed for {selector}: {e}")
-                            try: page.evaluate(f"document.querySelector('{selector}').click()")
+                            el.wait_for(state="visible", timeout=10000)
+                            box = el.bounding_box()
+                            if box:
+                                page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                el.click(force=True, timeout=2000)
+                            else:
+                                el.click(force=True)
+                        except:
+                            try: page.locator(selector).first.click(force=True)
                             except: pass
 
                     # Selection
@@ -479,38 +482,29 @@ def run_automation_logic(page, reader, unchecked_companies):
                         page.wait_for_timeout(500)
                         
                         smart_click("button:has-text('View Result')")
+                        page.wait_for_timeout(3000)
                         
-                        # High-robustness result detection
-                        status = "Pending"
-                        feedback = "No result found."
+                        res = page.evaluate("""
+                            () => {
+                                const b = document.body.innerText;
+                                if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].strip();
+                                if (b.includes("Sorry")) return "Not Allotted|Sorry, not allotted.";
+                                if (b.includes("Invalid Captcha")) return "RETRY";
+                                if (b.includes("Not Found") || b.includes("not found")) return "Not Allotted|BOID not found for this company.";
+                                return "Pending|No result found.";
+                            }
+                        """)
                         
-                        for check_wait in range(4): # Wait up to 8 seconds total
-                            page.wait_for_timeout(2000)
-                            res = page.evaluate("""
-                                () => {
-                                    const b = document.body.innerText;
-                                    if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].trim();
-                                    if (b.includes("Sorry")) return "Not Allotted|Sorry, not allotted.";
-                                    if (b.includes("Invalid Captcha")) return "RETRY";
-                                    if (b.includes("Not Found") || b.includes("not found")) return "Not Allotted|BOID not found for this company.";
-                                    return "PENDING";
-                                }
-                            """)
-                            
-                            if res == "RETRY":
-                                print(f"      [Captcha] Incorrect code. Retrying attempt {cap_attempt+1}...")
-                                break # Out of check_wait, will continue outer captcha loop
-                            
-                            if res != "PENDING":
-                                status, feedback = res.split("|")
-                                break
-                            
-                        if status == "Pending":
+                        if res == "RETRY":
+                            print(f"      [Captcha] Incorrect code. Retrying attempt {cap_attempt+1}...")
+                            continue
+                        
+                        if res == "Pending|No result found.":
                             if "rejected" in page.title().lower() or "Request Rejected" in page.content():
                                 print("      [Check] WAF Blocked during check. Reloading page...")
                                 need_reload = True
                                 break
-                            print(f"      [Check] Timeout or No result found.")
+                            print(f"      [Check] No result found (possible timeout or site delay).")
                             continue
 
                         status, feedback = res.split("|")
