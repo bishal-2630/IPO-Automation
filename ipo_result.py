@@ -426,22 +426,22 @@ def run_automation_logic(page, reader, unchecked_companies):
                     
                     def smart_click(selector):
                         try:
-                            # 1. Try physical click
+                            # 1. Focus the element (safe from pointer interception)
                             el = page.locator(selector).first
-                            el.wait_for(state="visible", timeout=3000)
-                            el.click(force=True, timeout=2000)
-                        except:
-                            try:
-                                # 2. Fallback: Focus + Keyboard Enter (Bypasses most click-interception iframes)
-                                print(f"      [Stealth] Using Keyboard Focus for {selector}")
-                                el = page.locator(selector).first
-                                el.focus()
-                                page.keyboard.press("Enter")
-                            except:
-                                try:
-                                    # 3. Fallback: JavaScript Dispatch
-                                    page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new Event('click', {{bubbles: true}}))")
-                                except: pass
+                            el.wait_for(state="visible", timeout=5000)
+                            el.focus()
+                            
+                            # 2. Dispatch JS events (Bypasses TSBrPFrame interception)
+                            page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new MouseEvent('mousedown', {{bubbles: true, cancelable: true}}))")
+                            page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true}}))")
+                            
+                            # 3. Fallback: Keyboard Enter
+                            page.keyboard.press("Enter")
+                            print(f"      [Stealth] Dispatched JS/Keyboard click to {selector}")
+                        except Exception as e:
+                            print(f"      [Stealth] smart_click failed for {selector}: {e}")
+                            try: page.evaluate(f"document.querySelector('{selector}').click()")
+                            except: pass
 
                     # Selection
                     smart_click(".ng-select-container")
