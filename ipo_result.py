@@ -311,9 +311,9 @@ def run_status_check():
         
         if proxy:
             print(f"  Using Proxy: {proxy.split('@')[-1]}")
-            browser = p.chromium.launch(headless=True, args=launch_args, proxy={"server": proxy})
+            browser = p.chromium.launch(headless=True, channel="chrome", args=launch_args, proxy={"server": proxy})
         else:
-            browser = p.chromium.launch(headless=True, args=launch_args)
+            browser = p.chromium.launch(headless=True, channel="chrome", args=launch_args)
         
         # Realistic context
         context = browser.new_context(
