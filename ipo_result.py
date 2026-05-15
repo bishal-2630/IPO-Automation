@@ -278,16 +278,9 @@ def solve_captcha(page, reader, max_retries=3):
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
-            # Trigger refresh for next attempt
-            page.wait_for_timeout(1000)
-            for r_sel in refresh_selectors:
-                try:
-                    btn = page.locator(r_sel).first
-                    if btn.is_visible(timeout=500):
-                        btn.click(force=True)
-                        break
-                except: continue
+            # NEVER CLICK REFRESH - Page reload is safer
+            print(f"      [Captcha] OCR found: '{all_digits}'. Triggering Reload for fresh state...")
+            return "RELOAD"
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -486,29 +479,38 @@ def run_automation_logic(page, reader, unchecked_companies):
                         page.wait_for_timeout(500)
                         
                         smart_click("button:has-text('View Result')")
-                        page.wait_for_timeout(3000)
                         
-                        res = page.evaluate("""
-                            () => {
-                                const b = document.body.innerText;
-                                if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].strip();
-                                if (b.includes("Sorry")) return "Not Allotted|Sorry, not allotted.";
-                                if (b.includes("Invalid Captcha")) return "RETRY";
-                                if (b.includes("Not Found") || b.includes("not found")) return "Not Allotted|BOID not found for this company.";
-                                return "Pending|No result found.";
-                            }
-                        """)
+                        # High-robustness result detection
+                        status = "Pending"
+                        feedback = "No result found."
                         
-                        if res == "RETRY":
-                            print(f"      [Captcha] Incorrect code. Retrying attempt {cap_attempt+1}...")
-                            continue
-                        
-                        if res == "Pending|No result found.":
+                        for check_wait in range(4): # Wait up to 8 seconds total
+                            page.wait_for_timeout(2000)
+                            res = page.evaluate("""
+                                () => {
+                                    const b = document.body.innerText;
+                                    if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].trim();
+                                    if (b.includes("Sorry")) return "Not Allotted|Sorry, not allotted.";
+                                    if (b.includes("Invalid Captcha")) return "RETRY";
+                                    if (b.includes("Not Found") || b.includes("not found")) return "Not Allotted|BOID not found for this company.";
+                                    return "PENDING";
+                                }
+                            """)
+                            
+                            if res == "RETRY":
+                                print(f"      [Captcha] Incorrect code. Retrying attempt {cap_attempt+1}...")
+                                break # Out of check_wait, will continue outer captcha loop
+                            
+                            if res != "PENDING":
+                                status, feedback = res.split("|")
+                                break
+                            
+                        if status == "Pending":
                             if "rejected" in page.title().lower() or "Request Rejected" in page.content():
                                 print("      [Check] WAF Blocked during check. Reloading page...")
                                 need_reload = True
                                 break
-                            print(f"      [Check] No result found (possible timeout or site delay).")
+                            print(f"      [Check] Timeout or No result found.")
                             continue
 
                         status, feedback = res.split("|")
