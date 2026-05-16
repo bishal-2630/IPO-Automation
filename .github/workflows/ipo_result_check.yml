@@ -71,6 +71,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}
           RUN_MODE: "check_status"
           HEADLESS: "false"
         run: xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" python -u ipo_result.py
