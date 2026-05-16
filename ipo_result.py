@@ -1,4 +1,4 @@
-﻿from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 import os
 import time
@@ -179,41 +179,42 @@ def solve_captcha(page, reader, max_retries=3):
             img = Image.open(io.BytesIO(captcha_bytes)).convert('L')
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
-
-            enhancements = [
-                img,
-                img3x,
-                ImageEnhance.Contrast(img3x).enhance(2.0),
-                ImageEnhance.Contrast(img3x).enhance(3.0),
-                img3x.point(lambda p: 255 if p > 100 else 0),
-                img3x.point(lambda p: 255 if p > 150 else 0),
-                img3x.point(lambda p: 255 if p > 180 else 0),
-                ImageOps.invert(img3x.point(lambda p: 255 if p > 128 else 0)),
-                ImageEnhance.Sharpness(img3x).enhance(5.0),
+            
+            # Multiple preprocessing paths to catch all digits
+            paths = [
+                # Path 1: Median Denoise (Excellent for removing 1px grid dots)
+                img3x.filter(ImageFilter.MedianFilter(size=3)),
+                # Path 2: High Contrast
+                ImageEnhance.Contrast(img3x).enhance(2.5),
+                # Path 3: Aggressive Binary (Threshold 128)
+                img3x.point(lambda p: 255 if p > 128 else 0),
+                # Path 4: Light Binary (Threshold 180)
+                img3x.point(lambda p: 255 if p > 180 else 0)
             ]
 
             best_code = None
-            for e_img in enhancements:
-                buf = io.BytesIO()
-                e_img.save(buf, format='PNG')
-                results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=1)
-                # Concatenate ALL digits across ALL bounding boxes
-                all_digits = "".join(re.findall(r'\d', " ".join(r[1] for r in results)))
-                if results:
-                    print(f"      [Captcha] OCR: {[r[1] for r in results]} -> '{all_digits}'")
-                if len(all_digits) == 5:
-                    best_code = all_digits
-                    break
-                if len(all_digits) == 4 and not best_code:
-                    best_code = all_digits  # Keep 4-digit as fallback
-
-            if best_code and len(best_code) >= 4:
+            for p_img in paths:
+                for inverted in [False, True]:
+                    final_img = ImageOps.invert(p_img) if inverted else p_img
+                    buf = io.BytesIO()
+                    final_img.save(buf, format='PNG')
+                    
+                    # detail=0 returns just the text
+                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
+                    all_digits = "".join(re.findall(r'\d', "".join(results)))
+                    
+                    if len(all_digits) == 5:
+                        best_code = all_digits
+                        break
+                if best_code: break
+            
+            if best_code:
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
-
-            print(f"      [Captcha] Attempt {attempt+1}: no code found. Refreshing...")
+            
+            print(f"      [Captcha] OCR failed. Found: '{all_digits if 'all_digits' in locals() else 'None'}'. Retrying...")
             captcha_img.click(force=True)
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(2000)
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
     print("      [Captcha] Failed all attempts.")
