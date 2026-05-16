@@ -21,5 +21,7 @@ jobs:
           RUN_MODE: "check_status"
           HEADLESS: "false"
         run: |
+          $env:PYTHONHOME=""
+          $env:PYTHONPATH=""
           $env:PYTHONIOENCODING="utf-8"
           & "C:\Users\Bishal\AppData\Local\Programs\Python\Python313\python.exe" -u ipo_result.py
