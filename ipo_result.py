@@ -201,8 +201,17 @@ def run_status_check():
         
         try:
             print("Navigating to portal...")
-            page.goto("https://iporesult.cdsc.com.np/", wait_until='networkidle', timeout=60000)
-            page.wait_for_selector("ng-select", timeout=30000)
+            page.goto("https://iporesult.cdsc.com.np/", wait_until='domcontentloaded', timeout=90000)
+            
+            print("  Waiting for dropdown (max 60s)...")
+            try:
+                page.wait_for_selector("ng-select", timeout=60000)
+            except Exception as e:
+                print(f"  [Timeout] Page content: {page.content()[:1000].replace('\n', ' ')}")
+                # Save screenshot
+                os.makedirs("screenshots", exist_ok=True)
+                page.screenshot(path="screenshots/timeout_diag.png")
+                raise e
             
             # Automation Logic
             all_options = []
