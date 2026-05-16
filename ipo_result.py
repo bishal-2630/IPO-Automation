@@ -437,6 +437,22 @@ def run_automation_logic(page, reader, unchecked_companies):
             if len(all_cdsc_companies) > 5:
                 break
             
+            # Diagnostic: check if API is blocked
+            api_status = page.evaluate("""
+                async () => {
+                    try {
+                        const r = await fetch('/api/company');
+                        return r.status;
+                    } catch (e) { return e.message; }
+                }
+            """)
+            print(f"    [Diagnostic] Company API Status: {api_status}")
+            
+            if attempt == 2:
+                print("    [Warning] Dropdown still empty. Attempting Hard Refresh...")
+                page.reload(wait_until='networkidle')
+                page.wait_for_timeout(5000)
+            
             print(f"    Dropdown has only {len(all_cdsc_companies)} items. Retrying...")
             page.keyboard.press("Escape")
             page.wait_for_timeout(2000)
