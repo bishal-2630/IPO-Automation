@@ -12,7 +12,7 @@ import psycopg2
 import logging
 from notifications import send_email_notification, send_push_notification
 try:
-    from PIL import Image, ImageEnhance, ImageOps
+    from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 except ImportError:
     pass
 
