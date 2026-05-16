@@ -319,8 +319,32 @@ def run_status_check():
         ]
         
         if proxy:
-            print(f"  Using Proxy: {proxy.split('@')[-1]}")
-            browser = p.chromium.launch(headless=True, channel="chrome", args=launch_args, proxy={"server": proxy})
+            # Parse proxy URL for explicit credentials to avoid auth errors
+            proxy_server = proxy
+            proxy_user = None
+            proxy_pass = None
+            
+            try:
+                if "@" in proxy:
+                    clean_proxy = proxy.replace("http://", "").replace("https://", "")
+                    creds_part, server_part = clean_proxy.split("@")
+                    proxy_server = "http://" + server_part
+                    if ":" in creds_part:
+                        proxy_user, proxy_pass = creds_part.split(":")
+            except:
+                pass
+
+            print(f"  Using Proxy: {proxy_server} (Auth: {'Yes' if proxy_user else 'No'})")
+            browser = p.chromium.launch(
+                headless=True, 
+                channel="chrome", 
+                args=launch_args, 
+                proxy={
+                    "server": proxy_server,
+                    "username": proxy_user,
+                    "password": proxy_pass
+                }
+            )
         else:
             browser = p.chromium.launch(headless=True, channel="chrome", args=launch_args)
         
