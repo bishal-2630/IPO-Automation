@@ -12,6 +12,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Run IPO Result Check
+        shell: powershell
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
@@ -19,4 +20,6 @@ jobs:
           PROXY_URL: ${{ secrets.PROXY_URL }}
           RUN_MODE: "check_status"
           HEADLESS: "false"
-        run: python -u ipo_result.py
+        run: |
+          $env:PYTHONIOENCODING="utf-8"
+          python -u ipo_result.py
