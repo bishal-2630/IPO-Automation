@@ -5,7 +5,7 @@ on:
 
 jobs:
   check-results:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -74,7 +74,7 @@ jobs:
           PROXY_URL: ${{ secrets.PROXY_URL }}
           RUN_MODE: "check_status"
           HEADLESS: "false"
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" python -u ipo_result.py
+        run: python -u ipo_result.py
 
       - name: Upload Debug Screenshots
         if: always()
