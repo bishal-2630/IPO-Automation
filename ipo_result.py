@@ -190,10 +190,10 @@ def run_status_check():
             print("[CRITICAL] NO PROXY DETECTED! CDSC will block the GitHub runner. Please verify your PROXY_URL secret.")
             return
 
+        proxy = proxy.strip().strip('/')
         proxy_kwargs = {}
         if "@" in proxy:
             try:
-                # Handle both http:// and raw strings
                 clean_proxy = proxy.replace("http://", "").replace("https://", "")
                 creds, server = clean_proxy.split("@")
                 proxy_kwargs = {"proxy": {"server": "http://" + server, "username": creds.split(":")[0], "password": creds.split(":")[1]}}
