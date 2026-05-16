@@ -151,7 +151,7 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Simple 3-path OCR
+            # Multi-Path OCR Logic
             paths = [
                 img3x.filter(ImageFilter.MedianFilter(size=3)),
                 ImageEnhance.Contrast(img3x).enhance(2.0),
@@ -169,7 +169,7 @@ def solve_captcha(page, reader, max_retries=3):
                         print(f"      [Captcha] Solved: {code}")
                         return code
             
-            print(f"      [Captcha] OCR failed. Retrying...")
+            print(f"      [Captcha] OCR failed. Found: '{code if 'code' in locals() else 'None'}'. Retrying...")
             page.locator("button[title='Reload Captcha']").first.click(force=True)
             page.wait_for_timeout(2000)
         except Exception as e:
@@ -177,91 +177,31 @@ def solve_captcha(page, reader, max_retries=3):
     return None
 
 def run_status_check():
-    print("--- IPO Result Check Version: 2026-05-14 V18 (Full Stealth) ---")
+    print("--- IPO Result Check Version: 2026-05-14 V18 (Full Stealth Revert) ---")
     companies = get_applied_companies()
-    if not companies: return
+    if not companies: 
+        print("No unchecked companies found.")
+        return
     
     import easyocr
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
-        proxy = os.getenv('PROXY_URL')
-        if not proxy:
-            print("[CRITICAL] NO PROXY DETECTED! CDSC will block the GitHub runner. Please verify your PROXY_URL secret.")
-            return
-
-        proxy = proxy.strip().strip('/')
-        proxy_kwargs = {}
-        if "@" in proxy:
-            try:
-                clean_proxy = proxy.replace("http://", "").replace("https://", "")
-                creds, server = clean_proxy.split("@")
-                proxy_kwargs = {"proxy": {"server": "http://" + server, "username": creds.split(":")[0], "password": creds.split(":")[1]}}
-                print(f"  Using Proxy: {server}")
-            except Exception as e:
-                print(f"  [Error] Parsing proxy: {e}")
-                return
-        else:
-            proxy_kwargs = {"proxy": {"server": proxy}}
-            print(f"  Using Proxy: {proxy}")
-
-        user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ]
-        
-        selected_ua = random.choice(user_agents)
-        is_win = "Windows" in selected_ua
-        
-        browser = p.chromium.launch(headless=False, channel="chrome", args=['--no-sandbox', '--disable-blink-features=AutomationControlled'], **proxy_kwargs)
-        context = browser.new_context(
-            viewport={"width": 1366, "height": 768},
-            user_agent=selected_ua,
-            locale="en-US",
-            device_scale_factor=random.choice([1, 1.25, 1.5]),
-            extra_http_headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Sec-Ch-Ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
-                "Sec-Ch-Ua-Mobile": "?0",
-                "Sec-Ch-Ua-Platform": '"Windows"' if is_win else '"macOS"',
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1"
-            }
-        )
+        browser = p.chromium.launch(headless=False, channel="chrome", args=['--no-sandbox'])
+        context = browser.new_context(viewport={"width": 1366, "height": 768}, user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36")
         page = context.new_page()
         if HAS_STEALTH and stealth_sync: stealth_sync(page)
         
-        # Spoof Hardware
-        page.add_init_script("Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => %d});" % random.choice([4, 8, 12, 16]))
-
         try:
             print("Navigating to portal...")
-            # Try navigating via a referer trick
-            page.set_extra_http_headers({"Referer": "https://www.google.com/search?q=ipo+result+nepal"})
-            page.goto("https://iporesult.cdsc.com.np/", wait_until='domcontentloaded', timeout=90000)
-            page.wait_for_timeout(3000)
+            page.goto("https://iporesult.cdsc.com.np/", wait_until='networkidle', timeout=60000)
+            page.wait_for_selector("ng-select", timeout=30000)
             
-            print("  Waiting for dropdown (max 60s)...")
-            try:
-                page.wait_for_selector("ng-select", timeout=60000)
-            except Exception as e:
-                content_sample = page.content()[:1000].replace('\n', ' ')
-                print(f"  [Timeout] Page content: {content_sample}")
-                # Save screenshot
-                os.makedirs("screenshots", exist_ok=True)
-                page.screenshot(path="screenshots/timeout_diag.png")
-                raise e
-            
-            # Automation Logic
-            all_options = []
+            # Get matches
             page.locator("ng-select").first.click()
             page.wait_for_timeout(2000)
             all_options = page.evaluate("() => Array.from(document.querySelectorAll('.ng-option')).map(o => o.innerText.trim())")
-            print(f"  Found {len(all_options)} companies.")
+            print(f"  Found {len(all_options)} companies on portal.")
 
             def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').strip()
             
@@ -274,34 +214,45 @@ def run_status_check():
                 
                 for acc in accounts:
                     print(f"   [{acc['MEROSHARE_USER']}] Checking...")
+                    
+                    # Reset Selection
                     page.locator("ng-select").first.click()
                     page.keyboard.type(matched)
                     page.keyboard.press("Enter")
+                    
+                    # Fill BOID
                     page.locator("input#boid").fill(acc['BOID'])
                     
+                    # Captcha Logic
                     for _ in range(3):
                         cap = solve_captcha(page, reader)
                         if not cap: continue
+                        
                         page.locator("#userCaptcha").first.fill(cap)
                         page.locator("button:has-text('View Result')").click()
                         page.wait_for_timeout(3000)
                         
                         res = page.evaluate("""() => {
                             const b = document.body.innerText;
-                            if (b.includes("Congratulations")) return "Allotted";
+                            if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].trim();
                             if (b.includes("Sorry")) return "Not Allotted";
                             if (b.includes("Invalid Captcha")) return "RETRY";
                             if (b.includes("Not Found")) return "NotFound";
                             return "Pending";
                         }""")
                         
-                        if res == "RETRY": continue
-                        if res in ["Allotted", "Not Allotted", "NotFound"]:
-                            status = "Not Allotted" if res == "NotFound" else res
-                            print(f"      Result: {status}")
-                            save_result_to_db(acc, target, status, "Checked automatically")
-                            send_push_notification(acc.get('TOKENS'), acc['MEROSHARE_USER'], f"{matched}: {status}")
+                        if res == "RETRY":
+                            print("      [Captcha] Incorrect. Retrying...")
+                            continue
+                        
+                        if "|" in res or res in ["Not Allotted", "NotFound"]:
+                            status = "Allotted" if "|" in res else ("Not Allotted" if res == "Not Allotted" else "Not Allotted")
+                            feedback = res.split("|")[1] if "|" in res else ("Sorry, not allotted." if res == "Not Allotted" else "BOID not found")
+                            print(f"      Result: {status} - {feedback}")
+                            save_result_to_db(acc, target, status, feedback)
+                            send_push_notification(acc.get('TOKENS'), acc['MEROSHARE_USER'], f"{matched}: {status} - {feedback}")
                             break
+                            
         except Exception as e:
             print(f"Fatal Error: {e}")
         finally:
