@@ -195,8 +195,24 @@ def run_status_check():
         elif proxy:
             proxy_kwargs = {"proxy": {"server": proxy}}
 
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ]
+
         browser = p.chromium.launch(headless=False, channel="chrome", args=['--no-sandbox'], **proxy_kwargs)
-        page = browser.new_page(viewport={"width": 1366, "height": 768})
+        context = browser.new_context(
+            viewport={"width": 1366, "height": 768},
+            user_agent=random.choice(user_agents),
+            locale="en-US",
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.google.com/",
+                "Upgrade-Insecure-Requests": "1"
+            }
+        )
+        page = context.new_page()
         if HAS_STEALTH and stealth_sync: stealth_sync(page)
         
         try:
