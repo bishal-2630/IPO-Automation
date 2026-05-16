@@ -338,17 +338,28 @@ def run_status_check():
             print(f"Navigating to {url}...")
             page.goto(url, wait_until='networkidle', timeout=90000)
             
-            # Check for WAF rejection
-            body_text = page.inner_text("body")
-            page_title = page.title()
-            print(f"  Page Title: {page_title}")
+            # Check for WAF rejection or empty load
+            body_text = page.inner_text("body").strip()
+            page_title = page.title().strip()
+            print(f"  Page Title: '{page_title}'")
             
-            if "requested URL was rejected" in body_text or "Request Rejected" in body_text or "rejected" in page_title.lower():
-                print(f"[CRITICAL] WAF blocked the request. Title: {page_title}.")
+            is_rejected = "requested URL was rejected" in body_text.lower() or "request rejected" in body_text.lower() or "rejected" in page_title.lower()
+            is_empty = len(body_text) < 100 and not page_title
+            
+            if is_rejected or is_empty:
+                reason = "WAF Blocked" if is_rejected else "Empty/Blank Page"
+                print(f"[CRITICAL] {reason}. Title: '{page_title}'.")
                 # Save screenshot for debugging
                 os.makedirs("screenshots", exist_ok=True)
-                page.screenshot(path="screenshots/waf_block.png")
-                return
+                page.screenshot(path="screenshots/load_fail.png")
+                
+                # Attempt one retry with a new context/session if it's a blank page
+                if is_empty:
+                    print("  Attempting page reload...")
+                    page.reload(wait_until='networkidle')
+                    page.wait_for_timeout(5000)
+                else:
+                    return
 
             # Wait for Angular app to fully load
             print("  Waiting for Angular app to load...")
@@ -392,8 +403,22 @@ def run_automation_logic(page, reader, unchecked_companies):
                 except: pass
 
         for attempt in range(5):
-            smart_click("ng-select")
-            page.wait_for_timeout(3000)
+            print(f"    Attempting to open dropdown ({attempt+1}/5)...")
+            try:
+                # 1. Click the container
+                page.locator("ng-select").first.click(force=True, timeout=5000)
+                page.wait_for_timeout(1000)
+                
+                # 2. If panel not visible, try keyboard
+                if not page.locator(".ng-dropdown-panel").is_visible():
+                    page.locator("ng-select").first.focus()
+                    page.keyboard.press("Space")
+                    page.wait_for_timeout(1000)
+                
+                # 3. Wait for options to appear
+                page.wait_for_selector(".ng-option", timeout=5000)
+            except:
+                pass
             
             all_cdsc_companies = page.evaluate("""
                 () => Array.from(document.querySelectorAll('.ng-option, ng-dropdown-panel .ng-option'))
@@ -404,9 +429,12 @@ def run_automation_logic(page, reader, unchecked_companies):
             if len(all_cdsc_companies) > 5:
                 break
             
-            print(f"    Dropdown has only {len(all_cdsc_companies)} items. Retrying ({attempt+1}/5)...")
+            print(f"    Dropdown has only {len(all_cdsc_companies)} items. Retrying...")
             page.keyboard.press("Escape")
             page.wait_for_timeout(2000)
+            # Harder interaction: click the arrow specifically if found
+            try: page.locator(".ng-arrow-wrapper").first.click(force=True, timeout=2000)
+            except: pass
         
         if not all_cdsc_companies:
             print("[Error] Could not read company list from CDSC portal.")
