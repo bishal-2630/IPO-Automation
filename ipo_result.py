@@ -138,204 +138,122 @@ def get_unchecked_accounts_for_company(company_name):
 
 def solve_captcha(page, reader, max_retries=3):
     import io, hashlib
-    last_hash = None
-    
-    img_selectors = ["img[src*='Captcha']", "img[src*='captcha']", "#captcha_image"]
-    refresh_selectors = ["button[title='Reload Captcha']", ".captcha-refresh", "button:has(.fa-refresh)"]
-    
     for attempt in range(max_retries):
         try:
-            captcha_img = None
-            for sel in img_selectors:
-                el = page.locator(sel).first
-                if el.is_visible(timeout=2000):
-                    captcha_img = el
-                    break
-            
-            if not captcha_img:
-                print("      [Captcha] Not found. Refreshing...")
-                page.reload()
-                page.wait_for_timeout(3000)
-                continue
-
-            # Capture image and check for staleness/blankness
-            raw = captcha_img.screenshot()
-            img_check = Image.open(io.BytesIO(raw)).convert('L')
-            import numpy as np
-            all_px = np.array(img_check).flatten()
-            white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
-            
-            if white_ratio > 0.95:
-                print(f"      [Captcha] Blank/White image detected ({white_ratio:.2f}). Refreshing...")
-                for r_sel in refresh_selectors:
-                    try:
-                        btn = page.locator(r_sel).first
-                        if btn.is_visible(timeout=500):
-                            btn.click(force=True)
-                            break
-                    except: pass
+            captcha_img = page.locator("img[src*='Captcha']").first
+            if not captcha_img.is_visible(timeout=5000):
+                print("      [Captcha] Image not found. Waiting...")
                 page.wait_for_timeout(2000)
                 continue
 
-            # Multi-Path OCR Logic
+            raw = captcha_img.screenshot()
             img = Image.open(io.BytesIO(raw)).convert('L')
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
+            # Simple 3-path OCR
             paths = [
-                img3x.filter(ImageFilter.MedianFilter(size=3)), # Denoise
-                ImageEnhance.Contrast(img3x).enhance(2.0),       # High Contrast
-                img3x.point(lambda p: 255 if p > 140 else 0)    # Binary
+                img3x.filter(ImageFilter.MedianFilter(size=3)),
+                ImageEnhance.Contrast(img3x).enhance(2.0),
+                img3x.point(lambda p: 255 if p > 140 else 0)
             ]
 
-            best_code = None
             for p_img in paths:
                 for inverted in [False, True]:
                     final_img = ImageOps.invert(p_img) if inverted else p_img
                     buf = io.BytesIO()
                     final_img.save(buf, format='PNG')
-                    
                     results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
-                    all_digits = "".join(re.findall(r'\d', "".join(results)))
-                    
-                    if len(all_digits) == 5:
-                        best_code = all_digits
-                        break
-                if best_code: break
+                    code = "".join(re.findall(r'\d', "".join(results)))
+                    if len(code) == 5:
+                        print(f"      [Captcha] Solved: {code}")
+                        return code
             
-            if best_code:
-                print(f"      [Captcha] Solved: {best_code}")
-                return best_code
-
-            print(f"      [Captcha] OCR failed. Found: '{all_digits}'. Retrying refresh...")
-            page.locator(refresh_selectors[0]).first.click(force=True)
+            print(f"      [Captcha] OCR failed. Retrying...")
+            page.locator("button[title='Reload Captcha']").first.click(force=True)
             page.wait_for_timeout(2000)
-            
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
-    
     return None
 
 def run_status_check():
-    print("--- IPO Result Check Version: 2026-05-16 (Proxy Revert) ---")
-    unchecked_companies = get_applied_companies()
-    if not unchecked_companies:
-        print("No unchecked IPO results found.")
-        return
-
+    print("--- IPO Result Check Version: 2026-05-14 V18 (Full Stealth) ---")
+    companies = get_applied_companies()
+    if not companies: return
+    
     import easyocr
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
         proxy = os.getenv('PROXY_URL')
-        launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
-        
         proxy_kwargs = {}
         if proxy and "@" in proxy:
             try:
-                clean_proxy = proxy.replace("http://", "").replace("https://", "")
-                creds, server = clean_proxy.split("@")
-                proxy_kwargs = {
-                    "proxy": {
-                        "server": "http://" + server,
-                        "username": creds.split(":")[0],
-                        "password": creds.split(":")[1]
-                    }
-                }
-                print(f"  Using Proxy: {server}")
+                creds, server = proxy.replace("http://", "").split("@")
+                proxy_kwargs = {"proxy": {"server": "http://" + server, "username": creds.split(":")[0], "password": creds.split(":")[1]}}
             except: pass
         elif proxy:
             proxy_kwargs = {"proxy": {"server": proxy}}
-            print(f"  Using Proxy: {proxy}")
 
-        browser = p.chromium.launch(headless=True, channel="chrome", args=launch_args, **proxy_kwargs)
-        context = browser.new_context(viewport={"width": 1366, "height": 768}, locale="en-US")
-        page = context.new_page()
+        browser = p.chromium.launch(headless=True, channel="chrome", args=['--no-sandbox'], **proxy_kwargs)
+        page = browser.new_page(viewport={"width": 1366, "height": 768})
         if HAS_STEALTH and stealth_sync: stealth_sync(page)
         
         try:
-            url = "https://iporesult.cdsc.com.np/"
-            print(f"Navigating to {url}...")
-            page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            print("Navigating to portal...")
+            page.goto("https://iporesult.cdsc.com.np/", wait_until='networkidle', timeout=60000)
+            page.wait_for_selector("ng-select", timeout=30000)
             
-            print("  Waiting for dropdown...")
-            page.wait_for_selector("ng-select", timeout=45000)
+            # Automation Logic
+            all_options = []
+            page.locator("ng-select").first.click()
+            page.wait_for_timeout(2000)
+            all_options = page.evaluate("() => Array.from(document.querySelectorAll('.ng-option')).map(o => o.innerText.trim())")
+            print(f"  Found {len(all_options)} companies.")
+
+            def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').strip()
             
-            # Start logic
-            run_automation_logic(page, reader, unchecked_companies)
-            
+            for target in companies:
+                matched = next((c for c in all_options if norm(target) in norm(c) or norm(c) in norm(target)), None)
+                if not matched: continue
+                
+                accounts = get_unchecked_accounts_for_company(target)
+                print(f"\n[Company] {matched} ({len(accounts)} accounts)")
+                
+                for acc in accounts:
+                    print(f"   [{acc['MEROSHARE_USER']}] Checking...")
+                    page.locator("ng-select").first.click()
+                    page.keyboard.type(matched)
+                    page.keyboard.press("Enter")
+                    page.locator("input#boid").fill(acc['BOID'])
+                    
+                    for _ in range(3):
+                        cap = solve_captcha(page, reader)
+                        if not cap: continue
+                        page.locator("#userCaptcha").first.fill(cap)
+                        page.locator("button:has-text('View Result')").click()
+                        page.wait_for_timeout(3000)
+                        
+                        res = page.evaluate("""() => {
+                            const b = document.body.innerText;
+                            if (b.includes("Congratulations")) return "Allotted";
+                            if (b.includes("Sorry")) return "Not Allotted";
+                            if (b.includes("Invalid Captcha")) return "RETRY";
+                            if (b.includes("Not Found")) return "NotFound";
+                            return "Pending";
+                        }""")
+                        
+                        if res == "RETRY": continue
+                        if res in ["Allotted", "Not Allotted", "NotFound"]:
+                            status = "Not Allotted" if res == "NotFound" else res
+                            print(f"      Result: {status}")
+                            save_result_to_db(acc, target, status, "Checked automatically")
+                            send_push_notification(acc.get('TOKENS'), acc['MEROSHARE_USER'], f"{matched}: {status}")
+                            break
         except Exception as e:
             print(f"Fatal Error: {e}")
         finally:
             browser.close()
-
-def run_automation_logic(page, reader, unchecked_companies):
-    # Get matches
-    all_options = []
-    page.locator("ng-select").first.click()
-    page.wait_for_timeout(2000)
-    all_options = page.evaluate("() => Array.from(document.querySelectorAll('.ng-option')).map(o => o.innerText.trim())")
-    
-    def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').strip()
-    matches = []
-    for c in all_options:
-        c_n = norm(c)
-        for db in unchecked_companies:
-            if c_n in norm(db) or norm(db) in c_n:
-                matches.append({'cdsc': c, 'db': db})
-                break
-    
-    print(f"  Found {len(matches)} matching companies.")
-    
-    for m in matches:
-        accounts = get_unchecked_accounts_for_company(m['db'])
-        if not accounts: continue
-        
-        print(f"\n[Company] {m['cdsc']}")
-        for acc in accounts:
-            try:
-                print(f"   [{acc['MEROSHARE_USER']}] Checking...")
-                
-                # Reset & Select
-                page.locator("ng-select").first.click()
-                page.keyboard.type(m['cdsc'])
-                page.keyboard.press("Enter")
-                
-                # BOID
-                page.locator("input#boid").fill(acc['BOID'])
-                
-                # Captcha loop
-                for cap_attempt in range(3):
-                    cap = solve_captcha(page, reader)
-                    if not cap: continue
-                    
-                    page.locator("#userCaptcha, #captcha").first.fill(cap)
-                    page.locator("button:has-text('View Result')").click()
-                    page.wait_for_timeout(3000)
-                    
-                    res = page.evaluate("""() => {
-                        const b = document.body.innerText;
-                        if (b.includes("Congratulations")) return "Allotted";
-                        if (b.includes("Sorry")) return "Not Allotted";
-                        if (b.includes("Invalid Captcha")) return "RETRY";
-                        if (b.includes("Not Found")) return "NotFound";
-                        return "Pending";
-                    }""")
-                    
-                    if res == "RETRY":
-                        print(f"      [Captcha] Incorrect code. Retrying...")
-                        continue
-                    
-                    if res in ["Allotted", "Not Allotted", "NotFound"]:
-                        status = "Not Allotted" if res == "NotFound" else res
-                        remark = "BOID not found" if res == "NotFound" else "Checked automatically"
-                        print(f"      Result: {status}")
-                        save_result_to_db(acc, m['db'], status, remark)
-                        send_push_notification(acc.get('TOKENS'), acc['MEROSHARE_USER'], f"{m['cdsc']}: {status}")
-                        break
-                    
-            except Exception as e:
-                print(f"      Error: {e}")
 
 if __name__ == "__main__":
     run_status_check()
