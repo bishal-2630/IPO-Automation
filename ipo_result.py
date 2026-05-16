@@ -324,12 +324,20 @@ def run_status_check():
         else:
             browser = p.chromium.launch(headless=True, channel="chrome", args=launch_args)
         
-        # Realistic context
+        # Realistic context with randomized UA
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edge/123.0.2420.81"
+        ]
+        
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            user_agent=random.choice(user_agents),
             viewport={"width": 1366, "height": 768},
             locale="en-US",
             timezone_id="Asia/Kathmandu",
+            extra_http_headers={"Referer": "https://www.google.com/"}
         )
         page = context.new_page()
 
@@ -363,8 +371,9 @@ def run_status_check():
                 
                 # Attempt one retry with a new context/session if it's a blank page
                 if is_empty:
-                    print("  Attempting page reload...")
-                    page.reload(wait_until='networkidle')
+                    print("  Attempting page reload with randomized UA...")
+                    page.set_extra_http_headers({"User-Agent": random.choice(user_agents), "Referer": "https://cdsc.com.np/"})
+                    page.goto(url, wait_until='domcontentloaded', timeout=60000)
                     page.wait_for_timeout(5000)
                 else:
                     return
