@@ -207,27 +207,43 @@ def run_status_check():
 
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ]
-
-        browser = p.chromium.launch(headless=False, channel="chrome", args=['--no-sandbox'], **proxy_kwargs)
+        
+        selected_ua = random.choice(user_agents)
+        is_win = "Windows" in selected_ua
+        
+        browser = p.chromium.launch(headless=False, channel="chrome", args=['--no-sandbox', '--disable-blink-features=AutomationControlled'], **proxy_kwargs)
         context = browser.new_context(
             viewport={"width": 1366, "height": 768},
-            user_agent=random.choice(user_agents),
+            user_agent=selected_ua,
             locale="en-US",
+            device_scale_factor=random.choice([1, 1.25, 1.5]),
             extra_http_headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://www.google.com/",
+                "Sec-Ch-Ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"' if is_win else '"macOS"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
                 "Upgrade-Insecure-Requests": "1"
             }
         )
         page = context.new_page()
         if HAS_STEALTH and stealth_sync: stealth_sync(page)
         
+        # Spoof Hardware
+        page.add_init_script("Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => %d});" % random.choice([4, 8, 12, 16]))
+
         try:
             print("Navigating to portal...")
+            # Try navigating via a referer trick
+            page.set_extra_http_headers({"Referer": "https://www.google.com/search?q=ipo+result+nepal"})
             page.goto("https://iporesult.cdsc.com.np/", wait_until='domcontentloaded', timeout=90000)
+            page.wait_for_timeout(3000)
             
             print("  Waiting for dropdown (max 60s)...")
             try:
