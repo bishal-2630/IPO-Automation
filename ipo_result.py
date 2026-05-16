@@ -186,14 +186,24 @@ def run_status_check():
 
     with sync_playwright() as p:
         proxy = os.getenv('PROXY_URL')
+        if not proxy:
+            print("[CRITICAL] NO PROXY DETECTED! CDSC will block the GitHub runner. Please verify your PROXY_URL secret.")
+            return
+
         proxy_kwargs = {}
-        if proxy and "@" in proxy:
+        if "@" in proxy:
             try:
-                creds, server = proxy.replace("http://", "").split("@")
+                # Handle both http:// and raw strings
+                clean_proxy = proxy.replace("http://", "").replace("https://", "")
+                creds, server = clean_proxy.split("@")
                 proxy_kwargs = {"proxy": {"server": "http://" + server, "username": creds.split(":")[0], "password": creds.split(":")[1]}}
-            except: pass
-        elif proxy:
+                print(f"  Using Proxy: {server}")
+            except Exception as e:
+                print(f"  [Error] Parsing proxy: {e}")
+                return
+        else:
             proxy_kwargs = {"proxy": {"server": proxy}}
+            print(f"  Using Proxy: {proxy}")
 
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
