@@ -246,40 +246,48 @@ def solve_captcha(page, reader, max_retries=3):
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Digit Segmentation Logic: Slice the image into 5 parts
-            # This prevents the background grid from confusing the whole sequence
-            best_code = ""
-            for i in range(5):
-                # Calculate coordinates for each of the 5 digits
-                left = (w * 3 / 5) * i
-                right = (w * 3 / 5) * (i + 1)
-                digit_crop = img3x.crop((left, 0, right, h * 3))
-                
-                # Clean the single digit (Grid-Killer)
-                digit_clean = digit_crop.filter(ImageFilter.MedianFilter(size=3))
-                digit_clean = ImageEnhance.Contrast(digit_clean).enhance(2.5)
-                
-                buf = io.BytesIO()
-                digit_clean.save(buf, format='PNG')
-                
-                res = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
-                digit = "".join(re.findall(r'\d', "".join(res)))
-                if digit:
-                    best_code += digit[0]
-                else:
-                    # Fallback: inverted
-                    import numpy as np
-                    res_inv = reader.readtext(np.array(ImageOps.invert(digit_clean)), allowlist='0123456789', detail=0)
-                    digit_inv = "".join(re.findall(r'\d', "".join(res_inv)))
-                    if digit_inv: best_code += digit_inv[0]
-                    else: best_code += "?"
+            # Multiple preprocessing paths to catch all digits
+            paths = [
+                # Path 1: Median Denoise (good for grid)
+                img3x.filter(ImageFilter.MedianFilter(size=3)),
+                # Path 2: Contrast + Sharpness
+                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
+                # Path 3: Aggressive Binary
+                img3x.point(lambda p: 255 if p > 128 else 0),
+                # Path 4: Light Binary
+                img3x.point(lambda p: 255 if p > 180 else 0)
+            ]
+
+            best_code = None
+            for p_idx, p_img in enumerate(paths):
+                # Try both normal and inverted for each path
+                for inverted in [False, True]:
+                    final_img = ImageOps.invert(p_img) if inverted else p_img
+                    buf = io.BytesIO()
+                    final_img.save(buf, format='PNG')
+                    
+                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=1)
+                    all_digits = "".join(re.findall(r'\d', "".join(r[1] for r in results)))
+                    
+                    if len(all_digits) == 5:
+                        best_code = all_digits
+                        break
+                if best_code: break
             
-            if len(best_code) == 5 and "?" not in best_code:
-                print(f"      [Captcha] Solved: {best_code} (via Segmentation)")
+            if best_code:
+                print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            print(f"      [Captcha] OCR failed. Found: '{best_code}'. Reloading page...")
-            return "RELOAD"
+            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
+            # Trigger refresh for next attempt
+            page.wait_for_timeout(1000)
+            for r_sel in refresh_selectors:
+                try:
+                    btn = page.locator(r_sel).first
+                    if btn.is_visible(timeout=500):
+                        btn.click(force=True)
+                        break
+                except: continue
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
