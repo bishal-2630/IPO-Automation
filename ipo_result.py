@@ -207,7 +207,8 @@ def run_status_check():
             try:
                 page.wait_for_selector("ng-select", timeout=60000)
             except Exception as e:
-                print(f"  [Timeout] Page content: {page.content()[:1000].replace('\n', ' ')}")
+                content_sample = page.content()[:1000].replace('\n', ' ')
+                print(f"  [Timeout] Page content: {content_sample}")
                 # Save screenshot
                 os.makedirs("screenshots", exist_ok=True)
                 page.screenshot(path="screenshots/timeout_diag.png")
