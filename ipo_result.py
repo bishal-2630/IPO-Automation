@@ -97,16 +97,11 @@ def get_accounts():
     except: return []
 
 def get_applied_companies():
-    """
-    Returns a list of companies that were successfully applied for
-    but are still missing an allotment result (Allotted/Not Allotted).
-    """
     db_url = os.environ.get("DATABASE_URL")
     if not db_url: return []
     try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
-        # Find companies where 'Success' exists but 'Allotted'/'Not Allotted' is missing for at least one account
         cur.execute("""
             SELECT DISTINCT company_name 
             FROM automation_applicationlog 
@@ -124,13 +119,9 @@ def get_applied_companies():
     except: return []
 
 def get_unchecked_accounts_for_company(company_name):
-    """
-    Returns accounts that applied for this company but haven't been checked.
-    """
     db_url = os.environ.get("DATABASE_URL")
-    accounts = get_accounts() # Get all accounts
+    accounts = get_accounts()
     if not db_url or not accounts: return []
-    
     try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
@@ -142,8 +133,6 @@ def get_unchecked_accounts_for_company(company_name):
         checked_ids = set(row[0] for row in cur.fetchall())
         cur.close()
         conn.close()
-        
-        # Only return accounts that are NOT in the checked list
         return [acc for acc in accounts if acc.get('ID') not in checked_ids]
     except: return accounts
 
@@ -151,123 +140,63 @@ def solve_captcha(page, reader, max_retries=3):
     import io, hashlib
     last_hash = None
     
-    img_selectors = [
-        "img[src*='Captcha']", "img[src*='captcha']", 
-        ".captcha-image img", "#captcha_image", 
-        "img[alt*='captcha']", ".captcha-img"
-    ]
-    
-    # Updated refresh selectors based on browser subagent findings
-    refresh_selectors = [
-        "button.btn:last-child",
-        "button[title='Reload Captcha']", 
-        "button:has(.fa-refresh)", 
-        "button:has(.fa-sync)",
-        ".captcha-refresh"
-    ]
+    img_selectors = ["img[src*='Captcha']", "img[src*='captcha']", "#captcha_image"]
+    refresh_selectors = ["button[title='Reload Captcha']", ".captcha-refresh", "button:has(.fa-refresh)"]
     
     for attempt in range(max_retries):
         try:
             captcha_img = None
             for sel in img_selectors:
-                try:
-                    el = page.locator(sel).first
-                    if el.is_visible(timeout=1000):
-                        captcha_img = el
-                        break
-                except: continue
+                el = page.locator(sel).first
+                if el.is_visible(timeout=2000):
+                    captcha_img = el
+                    break
             
             if not captcha_img:
-                print("      [Captcha] Image not found. Waiting...")
-                page.wait_for_timeout(2000)
+                print("      [Captcha] Not found. Refreshing...")
+                page.reload()
+                page.wait_for_timeout(3000)
                 continue
 
-            # 1. Capture and wait for a real, fresh image
-            captcha_bytes = None
-            for refresh_attempt in range(4):
-                # Increased wait for slow GH runners / WAF decoding
-                page.wait_for_timeout(3000)
-                raw = captcha_img.screenshot()
-                current_hash = hashlib.md5(raw).hexdigest()
-                
-                img_check = Image.open(io.BytesIO(raw)).convert('L')
-                import numpy as np
-                try:
-                    all_px = np.array(img_check).flatten()
-                except:
-                    all_px = list(img_check.getdata())
-                
-                white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
-                
-                # If it's a valid image (not all white) and (first time OR changed from last)
-                if white_ratio < 0.95 and (last_hash is None or current_hash != last_hash):
-                    captcha_bytes = raw
-                    last_hash = current_hash
-                    break
-                
-                # If image is completely white, it's a sign of a broken state/WAF block
-                if white_ratio > 0.99 and refresh_attempt > 0:
-                    print("      [WAF] Blank image / Request Rejected. Reloading...")
-                    return "RELOAD"
-
-                print(f"      [Captcha] Refresh needed (white={white_ratio:.2f}, same={current_hash == last_hash}). Attempt {refresh_attempt+1}...")
-                
-                # Try clicking refresh button with a human-like delay
-                page.wait_for_timeout(random.randint(1500, 3000))
-                refreshed = False
+            # Capture image and check for staleness/blankness
+            raw = captcha_img.screenshot()
+            img_check = Image.open(io.BytesIO(raw)).convert('L')
+            import numpy as np
+            all_px = np.array(img_check).flatten()
+            white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
+            
+            if white_ratio > 0.95:
+                print(f"      [Captcha] Blank/White image detected ({white_ratio:.2f}). Refreshing...")
                 for r_sel in refresh_selectors:
                     try:
                         btn = page.locator(r_sel).first
                         if btn.is_visible(timeout=500):
                             btn.click(force=True)
-                            refreshed = True
                             break
-                    except: continue
-                
-                if not refreshed:
-                    # Fallback: JS refresh
-                    page.evaluate("(sel) => { const img = document.querySelector(sel); if(img) { const b = img.src.split('?')[0]; img.src = b + '?v=' + Date.now(); } }", img_selectors[0])
-                
-                page.wait_for_timeout(2500)
-
-            if not captcha_bytes:
-                # If we're stuck, try one "Hard Refresh" of the page as a last resort
-                if attempt == max_retries - 1:
-                    print("      [Captcha] Persistent stuck image. Triggering page reload...")
-                    return "RELOAD"
+                    except: pass
+                page.wait_for_timeout(2000)
                 continue
 
-            # Image processing and OCR
-            os.makedirs("screenshots", exist_ok=True)
-            with open(f"screenshots/captcha_raw_{attempt}.png", "wb") as f:
-                f.write(captcha_bytes)
-
-            img = Image.open(io.BytesIO(captcha_bytes)).convert('L')
+            # Multi-Path OCR Logic
+            img = Image.open(io.BytesIO(raw)).convert('L')
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
             
-            # Multiple preprocessing paths to catch all digits
             paths = [
-                # Path 1: Median Denoise (good for grid)
-                img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: Contrast + Sharpness
-                ImageEnhance.Sharpness(ImageEnhance.Contrast(img3x).enhance(2.0)).enhance(2.0),
-                # Path 3: Aggressive Binary
-                img3x.point(lambda p: 255 if p > 128 else 0),
-                # Path 4: Light Binary
-                img3x.point(lambda p: 255 if p > 180 else 0)
+                img3x.filter(ImageFilter.MedianFilter(size=3)), # Denoise
+                ImageEnhance.Contrast(img3x).enhance(2.0),       # High Contrast
+                img3x.point(lambda p: 255 if p > 140 else 0)    # Binary
             ]
 
             best_code = None
-            for p_idx, p_img in enumerate(paths):
-                # Try both normal and inverted for each path
+            for p_img in paths:
                 for inverted in [False, True]:
                     final_img = ImageOps.invert(p_img) if inverted else p_img
                     buf = io.BytesIO()
                     final_img.save(buf, format='PNG')
                     
-                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=1)
-                    all_digits = "".join(re.findall(r'\d', "".join(r[1] for r in results)))
+                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
+                    all_digits = "".join(re.findall(r'\d', "".join(results)))
                     
                     if len(all_digits) == 5:
                         best_code = all_digits
@@ -278,16 +207,9 @@ def solve_captcha(page, reader, max_retries=3):
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
 
-            print(f"      [Captcha] OCR failed to find 5 digits. Found: '{all_digits}'. Retrying...")
-            # Trigger refresh for next attempt
-            page.wait_for_timeout(1000)
-            for r_sel in refresh_selectors:
-                try:
-                    btn = page.locator(r_sel).first
-                    if btn.is_visible(timeout=500):
-                        btn.click(force=True)
-                        break
-                except: continue
+            print(f"      [Captcha] OCR failed. Found: '{all_digits}'. Retrying refresh...")
+            page.locator(refresh_selectors[0]).first.click(force=True)
+            page.wait_for_timeout(2000)
             
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -295,323 +217,125 @@ def solve_captcha(page, reader, max_retries=3):
     return None
 
 def run_status_check():
-    print("--- IPO Result Check Version: 2026-05-14 V18 (Full Stealth) ---")
-    
-    # 1. Get companies that need checking
+    print("--- IPO Result Check Version: 2026-05-16 (Proxy Revert) ---")
     unchecked_companies = get_applied_companies()
     if not unchecked_companies:
-        print("No unchecked IPO results found in database. Everything is up to date!")
+        print("No unchecked IPO results found.")
         return
-
-    print(f"Found {len(unchecked_companies)} unchecked companies: {unchecked_companies}")
 
     import easyocr
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
-        # Stealth: Proxy and User-Agent randomization
         proxy = os.getenv('PROXY_URL')
-        launch_args = [
-            '--disable-blink-features=AutomationControlled',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-        ]
+        launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
         
-        if proxy:
-            # Parse proxy URL for explicit credentials to avoid auth errors
-            proxy_server = proxy
-            proxy_user = None
-            proxy_pass = None
-            
+        proxy_kwargs = {}
+        if proxy and "@" in proxy:
             try:
-                if "@" in proxy:
-                    clean_proxy = proxy.replace("http://", "").replace("https://", "")
-                    creds_part, server_part = clean_proxy.split("@")
-                    proxy_server = "http://" + server_part
-                    if ":" in creds_part:
-                        proxy_user, proxy_pass = creds_part.split(":")
-            except:
-                pass
-
-            print(f"  Using Proxy: {proxy_server} (Auth: {'Yes' if proxy_user else 'No'})")
-            browser = p.chromium.launch(
-                headless=True, 
-                channel="chrome", 
-                args=launch_args, 
-                proxy={
-                    "server": proxy_server,
-                    "username": proxy_user,
-                    "password": proxy_pass
+                clean_proxy = proxy.replace("http://", "").replace("https://", "")
+                creds, server = clean_proxy.split("@")
+                proxy_kwargs = {
+                    "proxy": {
+                        "server": "http://" + server,
+                        "username": creds.split(":")[0],
+                        "password": creds.split(":")[1]
+                    }
                 }
-            )
-        else:
-            browser = p.chromium.launch(headless=True, channel="chrome", args=launch_args)
-        
-        # Realistic context with randomized UA
-        user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edge/123.0.2420.81"
-        ]
-        
-        context = browser.new_context(
-            user_agent=random.choice(user_agents),
-            viewport={"width": 1366, "height": 768},
-            locale="en-US",
-            timezone_id="Asia/Kathmandu",
-            extra_http_headers={"Referer": "https://www.google.com/"}
-        )
+                print(f"  Using Proxy: {server}")
+            except: pass
+        elif proxy:
+            proxy_kwargs = {"proxy": {"server": proxy}}
+            print(f"  Using Proxy: {proxy}")
+
+        browser = p.chromium.launch(headless=True, channel="chrome", args=launch_args, **proxy_kwargs)
+        context = browser.new_context(viewport={"width": 1366, "height": 768}, locale="en-US")
         page = context.new_page()
-
+        if HAS_STEALTH and stealth_sync: stealth_sync(page)
+        
         try:
-            if HAS_STEALTH and stealth_sync:
-                stealth_sync(page)
-            
             url = "https://iporesult.cdsc.com.np/"
-            
-            # Natural delay before starting
-            print(f"  Preparing stealth session...")
-            page.wait_for_timeout(random.randint(3000, 6000))
-
             print(f"Navigating to {url}...")
-            page.goto(url, wait_until='networkidle', timeout=90000)
+            page.goto(url, wait_until='domcontentloaded', timeout=60000)
             
-            # Check for WAF rejection or empty load
-            body_text = page.inner_text("body").strip()
-            page_title = page.title().strip()
-            print(f"  Page Title: '{page_title}'")
+            print("  Waiting for dropdown...")
+            page.wait_for_selector("ng-select", timeout=45000)
             
-            is_rejected = "requested URL was rejected" in body_text.lower() or "request rejected" in body_text.lower() or "rejected" in page_title.lower()
-            is_empty = len(body_text) < 100 and not page_title
-            
-            if is_rejected or is_empty:
-                reason = "WAF Blocked" if is_rejected else "Empty/Blank Page"
-                print(f"[CRITICAL] {reason}. Title: '{page_title}'.")
-                # Save screenshot for debugging
-                os.makedirs("screenshots", exist_ok=True)
-                page.screenshot(path="screenshots/load_fail.png")
-                
-                # Attempt one retry with a new context/session if it's a blank page
-                if is_empty:
-                    print("  Attempting page reload with randomized UA...")
-                    page.set_extra_http_headers({"User-Agent": random.choice(user_agents), "Referer": "https://cdsc.com.np/"})
-                    page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                    page.wait_for_timeout(5000)
-                else:
-                    return
-
-            # Wait for Angular app to fully load
-            print("  Waiting for Angular app to load...")
-            page.wait_for_selector("ng-select, .ng-select-container", timeout=30000)
-            page.wait_for_timeout(2000)
-            
-            # Execute the automation logic
+            # Start logic
             run_automation_logic(page, reader, unchecked_companies)
             
-            browser.close()
-
         except Exception as e:
             print(f"Fatal Error: {e}")
-            try: browser.close()
-            except: pass
+        finally:
+            browser.close()
 
 def run_automation_logic(page, reader, unchecked_companies):
-    url = "https://iporesult.cdsc.com.np/"
-    try:
-        # Read all companies from CDSC dropdown
-        all_cdsc_companies = []
-        print("  Opening company dropdown...")
+    # Get matches
+    all_options = []
+    page.locator("ng-select").first.click()
+    page.wait_for_timeout(2000)
+    all_options = page.evaluate("() => Array.from(document.querySelectorAll('.ng-option')).map(o => o.innerText.trim())")
+    
+    def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').strip()
+    matches = []
+    for c in all_options:
+        c_n = norm(c)
+        for db in unchecked_companies:
+            if c_n in norm(db) or norm(db) in c_n:
+                matches.append({'cdsc': c, 'db': db})
+                break
+    
+    print(f"  Found {len(matches)} matching companies.")
+    
+    for m in matches:
+        accounts = get_unchecked_accounts_for_company(m['db'])
+        if not accounts: continue
         
-        def smart_click(selector):
+        print(f"\n[Company] {m['cdsc']}")
+        for acc in accounts:
             try:
-                # 1. Check for WAF block before action
-                if "Rejected" in page.content():
-                    raise Exception("IP Blocked by Firewall")
-
-                # 2. Focus + Keyboard Enter (Bypasses Click Interception)
-                el = page.locator(selector).first
-                el.wait_for(state="visible", timeout=5000)
-                el.focus()
+                print(f"   [{acc['MEROSHARE_USER']}] Checking...")
+                
+                # Reset & Select
+                page.locator("ng-select").first.click()
+                page.keyboard.type(m['cdsc'])
                 page.keyboard.press("Enter")
                 
-                # 3. JS Dispatch fallback
-                page.evaluate(f"document.querySelector('{selector}').dispatchEvent(new Event('click', {{bubbles: true}}))")
-            except Exception as e:
-                if "Blocked" in str(e): raise e
-                try: page.evaluate(f"document.querySelector('{selector}').click()")
-                except: pass
-
-        for attempt in range(5):
-            print(f"    Attempting to open dropdown ({attempt+1}/5)...")
-            try:
-                # 1. Click the container
-                page.locator("ng-select").first.click(force=True, timeout=5000)
-                page.wait_for_timeout(1000)
+                # BOID
+                page.locator("input#boid").fill(acc['BOID'])
                 
-                # 2. If panel not visible, try keyboard
-                if not page.locator(".ng-dropdown-panel").is_visible():
-                    page.locator("ng-select").first.focus()
-                    page.keyboard.press("Space")
-                    page.wait_for_timeout(1000)
-                
-                # 3. Wait for options to appear
-                page.wait_for_selector(".ng-option", timeout=5000)
-            except:
-                pass
-            
-            all_cdsc_companies = page.evaluate("""
-                () => Array.from(document.querySelectorAll('.ng-option, ng-dropdown-panel .ng-option'))
-                     .map(o => o.innerText.trim())
-                     .filter(t => t.length > 3)
-            """)
-            
-            if len(all_cdsc_companies) > 5:
-                break
-            
-            # Diagnostic: check if API is blocked
-            api_status = page.evaluate("""
-                async () => {
-                    try {
-                        const r = await fetch('/api/company');
-                        return r.status;
-                    } catch (e) { return e.message; }
-                }
-            """)
-            print(f"    [Diagnostic] Company API Status: {api_status}")
-            
-            if attempt == 2:
-                print("    [Warning] Dropdown still empty. Attempting Hard Refresh...")
-                page.reload(wait_until='networkidle')
-                page.wait_for_timeout(5000)
-            
-            print(f"    Dropdown has only {len(all_cdsc_companies)} items. Retrying...")
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(2000)
-            # Harder interaction: click the arrow specifically if found
-            try: page.locator(".ng-arrow-wrapper").first.click(force=True, timeout=2000)
-            except: pass
-        
-        if not all_cdsc_companies:
-            print("[Error] Could not read company list from CDSC portal.")
-            return
-
-        print(f"  Found {len(all_cdsc_companies)} companies on CDSC portal.")
-
-        # Match unchecked companies with CDSC portal names
-        def norm(n): return re.sub(r'\(.*?\)', '', n).lower().replace('limited', 'ltd').replace('ltd.', 'ltd').replace('company', '').replace('hydropower', 'hp').strip()
-        
-        matches = []
-        for c_name in all_cdsc_companies:
-            c_norm = norm(c_name)
-            for db_name in unchecked_companies:
-                db_norm = norm(db_name)
-                if c_norm in db_norm or db_norm in c_norm or c_norm.replace(' ', '') in db_norm.replace(' ', ''):
-                    matches.append({'cdsc': c_name, 'db': db_name})
-                    break
-        
-        if not matches:
-            print(f"  No matching companies found.")
-            return
-
-        print(f"Starting smart check for {len(matches)} matched companies...")
-
-        for m in matches:
-            target_accounts = get_unchecked_accounts_for_company(m['db'])
-            if not target_accounts:
-                continue
-
-            print(f"\n[Company] {m['cdsc']} (Checking {len(target_accounts)} accounts)")
-            
-            for account in target_accounts:
-                username = account.get('MEROSHARE_USER')
-                boid = account.get('BOID')
-                if not boid: continue
-                
-                try:
-                    print(f"   [{username}] Checking...")
+                # Captcha loop
+                for cap_attempt in range(3):
+                    cap = solve_captcha(page, reader)
+                    if not cap: continue
                     
-                    # No nested definition needed anymore
-
-                    # Selection
-                    smart_click(".ng-select-container")
-                    page.wait_for_timeout(500)
-                    page.keyboard.type(m['cdsc'], delay=80)
-                    page.wait_for_timeout(800)
-                    page.keyboard.press("Enter")
+                    page.locator("#userCaptcha, #captcha").first.fill(cap)
+                    page.locator("button:has-text('View Result')").click()
+                    page.wait_for_timeout(3000)
                     
-                    # BOID
-                    print(f"      Typing BOID...")
-                    smart_click("input#boid")
-                    page.keyboard.press("Control+A")
-                    page.keyboard.press("Backspace")
-                    page.keyboard.type(boid, delay=random.randint(80, 150))
-                    page.keyboard.press("Tab")
+                    res = page.evaluate("""() => {
+                        const b = document.body.innerText;
+                        if (b.includes("Congratulations")) return "Allotted";
+                        if (b.includes("Sorry")) return "Not Allotted";
+                        if (b.includes("Invalid Captcha")) return "RETRY";
+                        if (b.includes("Not Found")) return "NotFound";
+                        return "Pending";
+                    }""")
                     
-                    # Captcha loop
-                    print(f"      Solving Captcha...")
-                    need_reload = False
-                    for cap_attempt in range(4):
-                        cap = solve_captcha(page, reader)
-                        if cap == "RELOAD":
-                            need_reload = True
-                            break
-                        if not cap: continue
-                        
-                        page.evaluate(f"""() => {{
-                            const el = document.querySelector('#captcha') || document.querySelector('#userCaptcha') || document.querySelector('input[name="captcha"]');
-                            if (el) {{
-                                el.value = '{cap}';
-                                el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                                el.dispatchEvent(new Event('change', {{bubbles: true}}));
-                            }}
-                        }}""")
-                        page.wait_for_timeout(500)
-                        
-                        smart_click("button:has-text('View Result')")
-                        page.wait_for_timeout(3000)
-                        
-                        res = page.evaluate("""
-                            () => {
-                                const b = document.body.innerText;
-                                if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].strip();
-                                if (b.includes("Sorry")) return "Not Allotted|Sorry, not allotted.";
-                                if (b.includes("Invalid Captcha")) return "RETRY";
-                                if (b.includes("Not Found") || b.includes("not found")) return "Not Allotted|BOID not found for this company.";
-                                return "Pending|No result found.";
-                            }
-                        """)
-                        
-                        if res == "RETRY":
-                            print(f"      [Captcha] Incorrect code. Retrying attempt {cap_attempt+1}...")
-                            continue
-                        
-                        if res == "Pending|No result found.":
-                            if "rejected" in page.title().lower() or "Request Rejected" in page.content():
-                                print("      [Check] WAF Blocked during check. Reloading page...")
-                                need_reload = True
-                                break
-                            print(f"      [Check] No result found (possible timeout or site delay).")
-                            continue
-
-                        status, feedback = res.split("|")
+                    if res == "RETRY":
+                        print(f"      [Captcha] Incorrect code. Retrying...")
+                        continue
+                    
+                    if res in ["Allotted", "Not Allotted", "NotFound"]:
+                        status = "Not Allotted" if res == "NotFound" else res
+                        remark = "BOID not found" if res == "NotFound" else "Checked automatically"
                         print(f"      Result: {status}")
-                        
-                        if status != "Pending":
-                            save_result_to_db(account, m['db'], status, feedback)
-                            send_push_notification(account.get('TOKENS'), username, f"{m['cdsc']}: {status} - {feedback}")
+                        save_result_to_db(acc, m['db'], status, remark)
+                        send_push_notification(acc.get('TOKENS'), acc['MEROSHARE_USER'], f"{m['cdsc']}: {status}")
                         break
                     
-                    if need_reload:
-                        page.goto(url, wait_until='networkidle')
-                        page.wait_for_timeout(3000)
-                        continue
-                except Exception as e:
-                    print(f"     Error for {username}: {e}")
-
-    except Exception as e:
-        print(f"Fatal Error in automation logic: {e}")
+            except Exception as e:
+                print(f"      Error: {e}")
 
 if __name__ == "__main__":
     run_status_check()
