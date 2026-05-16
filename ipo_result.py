@@ -311,25 +311,11 @@ def run_status_check():
 def run_automation_logic(page, reader, unchecked_companies):
     # Move the actual scraping logic here (was previously in run_status_check)
     try:
-        # Read all companies from CDSC dropdown
-        all_cdsc_companies = []
+        # EXACT Working Dropdown Logic
         print("  Opening company dropdown...")
-        for attempt in range(5): # More attempts for slow proxies
-            page.locator("ng-select").first.click()
-            page.wait_for_timeout(3000) # Wait longer for list to populate
-            
-            all_cdsc_companies = page.evaluate("""
-                () => Array.from(document.querySelectorAll('.ng-option, ng-dropdown-panel .ng-option'))
-                     .map(o => o.innerText.trim())
-                     .filter(t => t.length > 3)
-            """)
-            
-            if len(all_cdsc_companies) > 5: # Real list is large
-                break
-            
-            print(f"    Dropdown has only {len(all_cdsc_companies)} items. Retrying ({attempt+1}/5)...")
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(2000)
+        page.locator("ng-select").first.click()
+        page.wait_for_timeout(2000)
+        all_cdsc_companies = page.evaluate("() => Array.from(document.querySelectorAll('.ng-option')).map(o => o.innerText.trim())")
         
         if not all_cdsc_companies:
             print("[Error] Could not read company list from CDSC portal.")
