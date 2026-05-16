@@ -12,12 +12,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Git Debug Info
-        run: |
-          git log -n 1 --oneline
-          ls -l ipo_result.py
-          grep -n "V18" ipo_result.py || echo "V18 NOT FOUND"
-
       - name: Cache EasyOCR Models
         uses: actions/cache@v3
         with:
