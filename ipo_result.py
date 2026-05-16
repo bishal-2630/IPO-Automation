@@ -195,7 +195,7 @@ def run_status_check():
         elif proxy:
             proxy_kwargs = {"proxy": {"server": proxy}}
 
-        browser = p.chromium.launch(headless=True, channel="chrome", args=['--no-sandbox'], **proxy_kwargs)
+        browser = p.chromium.launch(headless=False, channel="chrome", args=['--no-sandbox'], **proxy_kwargs)
         page = browser.new_page(viewport={"width": 1366, "height": 768})
         if HAS_STEALTH and stealth_sync: stealth_sync(page)
         
