@@ -200,8 +200,14 @@ def run_status_check():
         if HAS_STEALTH and stealth_sync: stealth_sync(page)
         
         try:
-            print("Navigating to portal...")
-            page.goto("https://iporesult.cdsc.com.np/", wait_until='networkidle', timeout=60000)
+            url = "https://iporesult.cdsc.com.np/"
+            print(f"Navigating to {url}...")
+            page.goto(url, wait_until='networkidle', timeout=60000)
+            
+            page_title = page.title().strip()
+            print(f"  Page Title: '{page_title}'")
+            
+            print("  Waiting for Angular app to load...")
             page.wait_for_selector("ng-select", timeout=30000)
             
             # EXACT Working Dropdown Logic
