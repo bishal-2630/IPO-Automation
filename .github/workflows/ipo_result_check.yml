@@ -24,4 +24,4 @@ jobs:
           $env:PYTHONHOME=""
           $env:PYTHONPATH=""
           $env:PYTHONIOENCODING="utf-8"
-          & "C:\Users\Bishal\AppData\Local\Programs\Python\Python313\python.exe" -u ipo_result.py
+          & "C:\Users\Bishal\AppData\Local\Programs\Python\Python312\python.exe" -u ipo_result.py
