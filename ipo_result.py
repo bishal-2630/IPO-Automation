@@ -207,9 +207,17 @@ def run_status_check():
             page.goto("https://iporesult.cdsc.com.np/", timeout=60000)
             
             print("  Waiting for dropdown...")
-            page.wait_for_selector("ng-select", timeout=30000)
-            
+            try:
+                page.wait_for_selector("ng-select", timeout=30000)
+            except Exception as e:
+                print(f"\n[ERROR] Timeout waiting for ng-select! The page might be blocked.")
+                print("--- PAGE HTML ---")
+                print(page.content())
+                print("-----------------\n")
+                raise e
+                
             # Dropdown logic
+
             page.locator("ng-select").first.click()
             page.wait_for_timeout(2000)
             all_options = page.evaluate("() => Array.from(document.querySelectorAll('.ng-option')).map(o => o.innerText.trim())")
