@@ -178,8 +178,10 @@ def run_status_check():
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, channel="chrome", args=['--no-sandbox'])
-        page = browser.new_page()
+        is_headless = os.getenv("HEADLESS", "true").lower() == "true"
+        browser = p.chromium.launch(headless=is_headless, channel="chrome", args=['--no-sandbox'])
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        page = browser.new_page(user_agent=user_agent)
         
         try:
             print("Navigating to portal...")
