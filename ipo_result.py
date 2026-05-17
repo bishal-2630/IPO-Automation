@@ -284,22 +284,33 @@ def run_status_check():
             print(f"Navigating to {url}...")
             page.goto(url, wait_until='domcontentloaded', timeout=60000, referer="https://www.google.com/")
             
-            # Check for WAF rejection
+            # Check for WAF rejection - check raw HTML content too
+            page_html = page.content()
             body_text = page.inner_text("body")
             page_title = page.title()
-            print(f"  Page Title: {page_title}")
+            print(f"  Page Title: '{page_title}'")
             
-            if "requested URL was rejected" in body_text or "Request Rejected" in body_text or "rejected" in page_title.lower():
-                print(f"[CRITICAL] WAF blocked the request. Title: {page_title}.")
-                # Save screenshot for debugging
+            if ("rejected" in body_text.lower() or 
+                "administrator" in body_text.lower() or
+                "Request Rejected" in page_html or
+                "rejected" in page_title.lower()):
+                print(f"[CRITICAL] WAF blocked the request!")
+                print(f"  Body preview: {body_text[:200]}")
                 os.makedirs("screenshots", exist_ok=True)
                 page.screenshot(path="screenshots/waf_block.png")
                 return
 
             # Wait for Angular app to fully load
             print("  Waiting for Angular app to load...")
-            page.wait_for_selector("ng-select, .ng-select-container", timeout=30000)
+            try:
+                page.wait_for_selector("ng-select, .ng-select-container", timeout=30000)
+            except Exception:
+                # One more WAF check if selector timed out
+                body_text2 = page.inner_text("body")
+                print(f"  [Timeout] Page body: {body_text2[:300]}")
+                raise
             page.wait_for_timeout(2000)
+
             
             # Execute the automation logic
             run_automation_logic(page, reader, unchecked_companies)
