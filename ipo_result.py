@@ -12,7 +12,7 @@ import psycopg2
 import logging
 from notifications import send_email_notification, send_push_notification
 try:
-    from PIL import Image, ImageEnhance, ImageOps
+    from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 except ImportError:
     pass
 
@@ -369,11 +369,7 @@ def run_automation_logic(page, reader, unchecked_companies):
 
             print(f"\n[Company] {m['cdsc']} (Checking {len(target_accounts)} accounts)")
             
-            # Navigate once per company to avoid triggering WAF for every single account check
-            try:
-                page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                page.wait_for_timeout(random.randint(2000, 4000))
-            except: pass
+            # Navigate fresh for each account to ensure clean form state
 
             for account in target_accounts:
                 username = account.get('MEROSHARE_USER')
@@ -382,6 +378,14 @@ def run_automation_logic(page, reader, unchecked_companies):
                 
                 try:
                     print(f"   [{username}] Checking...")
+                    # Fresh page reload for each account to ensure clean form state
+                    try:
+                        page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                        page.wait_for_selector("ng-select, .ng-select-container", timeout=20000)
+                        page.wait_for_timeout(random.randint(1500, 2500))
+                    except Exception as nav_e:
+                        print(f"      [Nav Error] {nav_e}")
+                        continue
                     
                     # Use a resilient click that handles WAF overlays
                     def smart_click(selector):
