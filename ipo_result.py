@@ -151,22 +151,28 @@ def solve_captcha(page, reader, max_retries=3):
     import io
     for attempt in range(max_retries):
         try:
+            # Re-locate captcha each attempt to avoid stale element after JS refresh
             captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
             captcha_img.wait_for(state="visible", timeout=20000)
 
-            # Wait for real captcha ΓÇö keep screenshotting until image has actual content
+            # Wait for real captcha image to load (not blank white)
             captcha_bytes = None
             for _ in range(15):
                 raw = captcha_img.screenshot()
                 img_check = Image.open(io.BytesIO(raw)).convert('L')
                 all_px = list(img_check.getdata())
-                white_ratio = sum(1 for p in all_px if p > 240) / len(all_px)
+                white_ratio = sum(1 for px in all_px if px > 240) / len(all_px)
                 if white_ratio < 0.9:
                     captcha_bytes = raw
                     break
                 print(f"      [Captcha] Blank image (white={white_ratio:.2f}), waiting...")
-                captcha_img.click(force=True)
+                # Use JS to refresh captcha src without clicking/navigating away
+                page.evaluate("""() => {
+                    const img = document.querySelector("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha']");
+                    if (img) { const s = img.src.split('?')[0]; img.src = s + '?r=' + Math.random(); }
+                }""")
                 page.wait_for_timeout(2000)
+                captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
 
             if not captcha_bytes:
                 print(f"      [Captcha] Could not load real captcha image. Skipping attempt {attempt+1}.")
@@ -179,41 +185,38 @@ def solve_captcha(page, reader, max_retries=3):
             img = Image.open(io.BytesIO(captcha_bytes)).convert('L')
             w, h = img.size
             img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
-            
-            # Multiple preprocessing paths to catch all digits
+
             paths = [
-                # Path 1: Median Denoise (Excellent for removing 1px grid dots)
                 img3x.filter(ImageFilter.MedianFilter(size=3)),
-                # Path 2: High Contrast
                 ImageEnhance.Contrast(img3x).enhance(2.5),
-                # Path 3: Aggressive Binary (Threshold 128)
                 img3x.point(lambda p: 255 if p > 128 else 0),
-                # Path 4: Light Binary (Threshold 180)
                 img3x.point(lambda p: 255 if p > 180 else 0)
             ]
 
             best_code = None
+            all_digits = ''
             for p_img in paths:
                 for inverted in [False, True]:
                     final_img = ImageOps.invert(p_img) if inverted else p_img
                     buf = io.BytesIO()
                     final_img.save(buf, format='PNG')
-                    
-                    # detail=0 returns just the text
                     results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
                     all_digits = "".join(re.findall(r'\d', "".join(results)))
-                    
-                    if len(all_digits) == 5:
-                        best_code = all_digits
+                    if len(all_digits) >= 5:
+                        best_code = all_digits[:5]  # Take first 5 if OCR over-reads
                         break
-                if best_code: break
-            
+                if best_code:
+                    break
+
             if best_code:
                 print(f"      [Captcha] Solved: {best_code}")
                 return best_code
-            
-            print(f"      [Captcha] OCR failed. Found: '{all_digits if 'all_digits' in locals() else 'None'}'. Retrying...")
-            captcha_img.click(force=True)
+
+            print(f"      [Captcha] OCR failed. Found: '{all_digits}'. Refreshing captcha...")
+            page.evaluate("""() => {
+                const img = document.querySelector("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha']");
+                if (img) { const s = img.src.split('?')[0]; img.src = s + '?r=' + Math.random(); }
+            }""")
             page.wait_for_timeout(2000)
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -379,13 +382,25 @@ def run_automation_logic(page, reader, unchecked_companies):
                 
                 try:
                     print(f"   [{username}] Checking...")
-                    # Fresh page reload for each account to ensure clean form state
-                    try:
-                        page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                        page.wait_for_selector("ng-select, .ng-select-container", timeout=20000)
-                        page.wait_for_timeout(random.randint(1500, 2500))
-                    except Exception as nav_e:
-                        print(f"      [Nav Error] {nav_e}")
+                    # Fresh page reload for each account with WAF detection
+                    waf_blocked = False
+                    for nav_retry in range(3):
+                        try:
+                            page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                            page.wait_for_timeout(random.randint(2000, 4000))
+                            body = page.inner_text("body")
+                            if "rejected" in body.lower() or "administrator" in body.lower():
+                                print(f"      [WAF] Blocked! Waiting 30s before retry {nav_retry+1}/3...")
+                                page.wait_for_timeout(30000)
+                                continue
+                            page.wait_for_selector("ng-select, .ng-select-container", timeout=20000)
+                            waf_blocked = False
+                            break
+                        except Exception as nav_e:
+                            print(f"      [Nav Error] {nav_e}")
+                            waf_blocked = True
+                    if waf_blocked:
+                        print(f"      [Skip] WAF blocked after 3 retries. Skipping account.")
                         continue
                     
                     # Use a resilient click that handles WAF overlays
