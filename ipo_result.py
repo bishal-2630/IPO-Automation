@@ -179,9 +179,28 @@ def run_status_check():
 
     with sync_playwright() as p:
         is_headless = os.getenv("HEADLESS", "true").lower() == "true"
-        browser = p.chromium.launch(headless=is_headless, channel="chrome", args=['--no-sandbox'])
+        
+        proxy_url = os.getenv("PROXY_URL")
+        proxy_kwargs = {}
+        if proxy_url:
+            if "@" in proxy_url:
+                clean_proxy = proxy_url.replace("http://", "").replace("https://", "")
+                creds, server = clean_proxy.split("@")
+                proxy_kwargs = {"proxy": {"server": "http://" + server, "username": creds.split(":")[0], "password": creds.split(":")[1]}}
+            else:
+                proxy_kwargs = {"proxy": {"server": proxy_url}}
+            print(f"  [Proxy] Using Proxy for WAF Bypass...")
+            
+        browser = p.chromium.launch(headless=is_headless, channel="chrome", args=['--no-sandbox'], **proxy_kwargs)
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        page = browser.new_page(user_agent=user_agent)
+        context = browser.new_context(user_agent=user_agent)
+        page = context.new_page()
+        
+        try:
+            from playwright_stealth import Stealth
+            Stealth().apply_stealth_sync(page)
+        except ImportError:
+            print("  [Warning] playwright-stealth not installed, proceeding without it.")
         
         try:
             print("Navigating to portal...")
