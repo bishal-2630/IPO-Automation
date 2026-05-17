@@ -310,6 +310,7 @@ def run_status_check():
 
 def run_automation_logic(page, reader, unchecked_companies):
     # Move the actual scraping logic here (was previously in run_status_check)
+    url = "https://iporesult.cdsc.com.np/"
     try:
         # Read all companies from CDSC dropdown
         all_cdsc_companies = []
