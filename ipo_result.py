@@ -381,6 +381,7 @@ def run_automation_logic(page, reader, unchecked_companies):
 
         print(f"Starting smart check for {len(matches)} matched companies...")
 
+        first_company = True
         for m in matches:
             # Find only accounts that haven't been checked for THIS specific company
             target_accounts = get_unchecked_accounts_for_company(m['db'])
@@ -389,11 +390,15 @@ def run_automation_logic(page, reader, unchecked_companies):
 
             print(f"\n[Company] {m['cdsc']} (Checking {len(target_accounts)} accounts)")
             
-            # Navigate once per company to avoid triggering WAF for every single account check
-            try:
-                page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                page.wait_for_timeout(random.randint(2000, 4000))
-            except: pass
+            # Navigate once per company (skip for first company to use the verified loaded page)
+            if not first_company:
+                try:
+                    print(f"   Navigating to fresh page for {m['cdsc']}...")
+                    page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                    page.wait_for_timeout(random.randint(2000, 4000))
+                except: pass
+            else:
+                first_company = False
 
             for account in target_accounts:
                 username = account.get('MEROSHARE_USER')
@@ -402,6 +407,21 @@ def run_automation_logic(page, reader, unchecked_companies):
                 
                 try:
                     print(f"   [{username}] Checking...")
+                    
+                    # WAF detection check
+                    body_text = page.inner_text("body")
+                    if "rejected" in body_text.lower() or "administrator" in body_text.lower():
+                        print("      [WAF] Rejection detected on page! Attempting self-healing reload...")
+                        try:
+                            page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                            page.wait_for_timeout(3000)
+                            body_text = page.inner_text("body")
+                        except Exception as reload_e:
+                            print(f"      [WAF] Reload navigation failed: {reload_e}")
+                        
+                        if "rejected" in body_text.lower() or "administrator" in body_text.lower():
+                            print("      [WAF] Still blocked after reload. Skipping company batch.")
+                            break
                     
                     # Close any outstanding modals before starting
                     try:
