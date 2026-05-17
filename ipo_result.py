@@ -10,11 +10,14 @@ import re
 import datetime
 import psycopg2
 import logging
+import cv2
+import numpy as np
 from notifications import send_email_notification, send_push_notification
 try:
     from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 except ImportError:
     pass
+
 
 try:
     from playwright_stealth import stealth_sync
@@ -167,12 +170,12 @@ def solve_captcha(page, reader, max_retries=3):
                     break
                 print(f"      [Captcha] Blank image (white={white_ratio:.2f}), waiting...")
                 
-                # Only force a JS refresh if it has been blank for a while (avoiding aggressive refreshes)
+                # Only force a refresh if it has been blank for a while (avoiding aggressive refreshes)
                 if blank_check >= 5:
-                    page.evaluate("""() => {
-                        const img = document.querySelector("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha']");
-                        if (img) { const s = img.src.split('?')[0]; img.src = s + '?r=' + Math.random(); }
-                    }""")
+                    try:
+                        captcha_img.click(force=True, timeout=2000)
+                    except:
+                        pass
                     page.wait_for_timeout(2000)
                 else:
                     page.wait_for_timeout(1000)
@@ -187,41 +190,74 @@ def solve_captcha(page, reader, max_retries=3):
             with open(f"screenshots/captcha_attempt_{attempt}.png", "wb") as f:
                 f.write(captcha_bytes)
 
-            img = Image.open(io.BytesIO(captcha_bytes)).convert('L')
-            w, h = img.size
-            img3x = img.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
+            # Process the image with advanced morphological filters
+            nparr = np.frombuffer(captcha_bytes, np.uint8)
+            img_cv = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            h, w = img_cv.shape
 
-            paths = [
-                img3x.filter(ImageFilter.MedianFilter(size=3)),
-                ImageEnhance.Contrast(img3x).enhance(2.5),
-                img3x.point(lambda p: 255 if p > 128 else 0),
-                img3x.point(lambda p: 255 if p > 180 else 0)
-            ]
+            # Generate upscaled images
+            img_3x = cv2.resize(img_cv, (w * 3, h * 3), interpolation=cv2.INTER_LANCZOS4)
+            img_2x = cv2.resize(img_cv, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
 
-            best_code = None
-            all_digits = ''
-            for p_img in paths:
+            # Advanced image processing pathways
+            preprocessed_images = {}
+
+            # Path 1: 3x Resize + Closing
+            preprocessed_images["3x_Closing"] = cv2.morphologyEx(img_3x, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+
+            # Path 2: 3x Resize + Dilate then Erode
+            kernel_de = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+            preprocessed_images["3x_DilateErode"] = cv2.erode(cv2.dilate(img_3x, kernel_de, iterations=1), kernel_de, iterations=1)
+
+            # Path 3: 3x Resize + Median Blur 9 + Otsu Thresholding
+            blur9 = cv2.medianBlur(img_3x, 9)
+            _, thresh9 = cv2.threshold(blur9, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            preprocessed_images["3x_Median9_Otsu"] = thresh9
+
+            # Path 4: 3x Resize + Median Blur 13 + Otsu Thresholding
+            blur13 = cv2.medianBlur(img_3x, 13)
+            _, thresh13 = cv2.threshold(blur13, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            preprocessed_images["3x_Median13_Otsu"] = thresh13
+
+            # Path 5: 1x Original -> Line Subtraction & Closing -> 2x Resize
+            _, binary = cv2.threshold(img_cv, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (8, 1)), iterations=1)
+            vertical_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 8)), iterations=1)
+            digits_only = cv2.subtract(cv2.subtract(binary, horizontal_lines), vertical_lines)
+            vertical_closing = cv2.morphologyEx(digits_only, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2)))
+            preprocessed_images["1x_Closed_2x"] = cv2.resize(vertical_closing, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+
+            # Path 6: Raw 2x Resize
+            preprocessed_images["Raw_2x"] = img_2x
+
+            # Run OCR on all pathways and gather guesses
+            guesses = []
+            for name, img_proc in preprocessed_images.items():
                 for inverted in [False, True]:
-                    final_img = ImageOps.invert(p_img) if inverted else p_img
-                    buf = io.BytesIO()
-                    final_img.save(buf, format='PNG')
-                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
+                    final_img = cv2.bitwise_not(img_proc) if inverted else img_proc
+                    _, encoded = cv2.imencode('.png', final_img)
+                    
+                    results = reader.readtext(encoded.tobytes(), allowlist='0123456789', detail=0)
                     all_digits = "".join(re.findall(r'\d', "".join(results)))
-                    if len(all_digits) >= 5:
-                        best_code = all_digits[:5]  # Take first 5 if OCR over-reads
-                        break
-                if best_code:
-                    break
+                    
+                    if len(all_digits) == 5:
+                        guesses.append(all_digits)
+                    elif len(all_digits) > 5:
+                        guesses.append(all_digits[:5])
 
-            if best_code:
-                print(f"      [Captcha] Solved: {best_code}")
+            # Select the most common 5-digit guess (majority voting)
+            if guesses:
+                from collections import Counter
+                counter = Counter(guesses)
+                best_code, count = counter.most_common(1)[0]
+                print(f"      [Captcha] Solved: {best_code} (Consensus {count}/{len(guesses)})")
                 return best_code
 
-            print(f"      [Captcha] OCR failed. Found: '{all_digits}'. Refreshing captcha...")
-            page.evaluate("""() => {
-                const img = document.querySelector("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha']");
-                if (img) { const s = img.src.split('?')[0]; img.src = s + '?r=' + Math.random(); }
-            }""")
+            print(f"      [Captcha] OCR failed. Refreshing captcha...")
+            try:
+                captcha_img.click(force=True, timeout=2000)
+            except:
+                pass
             page.wait_for_timeout(2000)
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
@@ -243,37 +279,32 @@ def run_status_check():
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
-        launch_kwargs = {
-            "headless": os.environ.get("HEADLESS", "true").lower() != "false",
-            "channel": "chrome",
-            "ignore_default_args": ["--enable-automation"],
-            "args": [
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--window-size=1366,768',
-            ]
-        }
-
+        user_data_dir = os.path.join(os.getcwd(), "chrome_profile_final")
+        
         try:
-            browser = p.chromium.launch(**launch_kwargs)
-            context = browser.new_context(
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                headless=os.environ.get("HEADLESS", "false").lower() != "false",
+                channel="chrome",
+                ignore_default_args=["--enable-automation"],
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--window-size=1366,768',
+                ],
                 viewport={"width": 1366, "height": 768},
                 locale="en-US",
                 timezone_id="Asia/Kathmandu",
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                extra_http_headers={
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                    "Sec-Fetch-Dest": "document",
-                    "Sec-Fetch-Mode": "navigate",
-                    "Sec-Fetch-Site": "none",
-                    "Sec-Fetch-User": "?1",
-                    "Upgrade-Insecure-Requests": "1"
-                }
             )
-            page = context.new_page()
+            
+            # Persistent context has an open page by default
+            if context.pages:
+                page = context.pages[0]
+            else:
+                page = context.new_page()
+
             if HAS_STEALTH and stealth_sync:
                 stealth_sync(page)
             
@@ -320,11 +351,11 @@ def run_status_check():
             # Execute the automation logic
             run_automation_logic(page, reader, unchecked_companies)
             
-            browser.close()
+            context.close()
 
         except Exception as e:
             print(f"Fatal Error: {e}")
-            try: browser.close()
+            try: context.close()
             except: pass
 
 def run_automation_logic(page, reader, unchecked_companies):
@@ -483,15 +514,28 @@ def run_automation_logic(page, reader, unchecked_companies):
                         
                         # Submit via smart_click which uses coordinate-based mouse click
                         smart_click("button:has-text('View Result')")
-                            
-                        page.wait_for_timeout(2500)
                         
+                        # Dynamically wait for CDSC response modal (Congratulations / Sorry / Invalid Captcha)
+                        try:
+                            page.locator("text=Congratulations, text=Sorry, text=Invalid, text=Incorrect, text=Wrong").first.wait_for(state="visible", timeout=8000)
+                        except:
+                            pass
+                            
                         res = page.evaluate("""
                             () => {
                                 const b = document.body.innerText;
-                                if (b.includes("Congratulations")) return "Allotted|" + b.split('Congratulations')[1].split('.')[0].strip();
-                                if (b.includes("Sorry")) return "Not Allotted|Sorry, not allotted.";
-                                if (b.includes("Invalid Captcha")) return "RETRY";
+                                const lower = b.toLowerCase();
+                                if (lower.includes("congratulations")) {
+                                    const parts = b.split(/congratulations/i);
+                                    const details = parts.length > 1 ? parts[1].split('.')[0].trim() : "";
+                                    return "Allotted|" + details;
+                                }
+                                if (lower.includes("sorry")) {
+                                    return "Not Allotted|Sorry, not allotted.";
+                                }
+                                if (lower.includes("invalid") || lower.includes("incorrect") || lower.includes("wrong")) {
+                                    return "RETRY";
+                                }
                                 return "Pending|No result found.";
                             }
                         """)
