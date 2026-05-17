@@ -157,7 +157,7 @@ def solve_captcha(page, reader, max_retries=3):
 
             # Wait for real captcha image to load (not blank white)
             captcha_bytes = None
-            for _ in range(15):
+            for blank_check in range(15):
                 raw = captcha_img.screenshot()
                 img_check = Image.open(io.BytesIO(raw)).convert('L')
                 all_px = list(img_check.getdata())
@@ -166,12 +166,17 @@ def solve_captcha(page, reader, max_retries=3):
                     captcha_bytes = raw
                     break
                 print(f"      [Captcha] Blank image (white={white_ratio:.2f}), waiting...")
-                # Use JS to refresh captcha src without clicking/navigating away
-                page.evaluate("""() => {
-                    const img = document.querySelector("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha']");
-                    if (img) { const s = img.src.split('?')[0]; img.src = s + '?r=' + Math.random(); }
-                }""")
-                page.wait_for_timeout(2000)
+                
+                # Only force a JS refresh if it has been blank for a while (avoiding aggressive refreshes)
+                if blank_check >= 5:
+                    page.evaluate("""() => {
+                        const img = document.querySelector("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha']");
+                        if (img) { const s = img.src.split('?')[0]; img.src = s + '?r=' + Math.random(); }
+                    }""")
+                    page.wait_for_timeout(2000)
+                else:
+                    page.wait_for_timeout(1000)
+                    
                 captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
 
             if not captcha_bytes:
@@ -384,7 +389,11 @@ def run_automation_logic(page, reader, unchecked_companies):
 
             print(f"\n[Company] {m['cdsc']} (Checking {len(target_accounts)} accounts)")
             
-            # Navigate fresh for each account to ensure clean form state
+            # Navigate once per company to avoid triggering WAF for every single account check
+            try:
+                page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                page.wait_for_timeout(random.randint(2000, 4000))
+            except: pass
 
             for account in target_accounts:
                 username = account.get('MEROSHARE_USER')
@@ -393,26 +402,15 @@ def run_automation_logic(page, reader, unchecked_companies):
                 
                 try:
                     print(f"   [{username}] Checking...")
-                    # Fresh page reload for each account with WAF detection
-                    waf_blocked = False
-                    for nav_retry in range(3):
-                        try:
-                            page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                            page.wait_for_timeout(random.randint(2000, 4000))
-                            body = page.inner_text("body")
-                            if "rejected" in body.lower() or "administrator" in body.lower():
-                                print(f"      [WAF] Blocked! Waiting 30s before retry {nav_retry+1}/3...")
-                                page.wait_for_timeout(30000)
-                                continue
-                            page.wait_for_selector("ng-select, .ng-select-container", timeout=20000)
-                            waf_blocked = False
-                            break
-                        except Exception as nav_e:
-                            print(f"      [Nav Error] {nav_e}")
-                            waf_blocked = True
-                    if waf_blocked:
-                        print(f"      [Skip] WAF blocked after 3 retries. Skipping account.")
-                        continue
+                    
+                    # Close any outstanding modals before starting
+                    try:
+                        ok_btn = page.locator("button:has-text('Ok'), button:has-text('OK'), button:has-text('Go Back')").first
+                        if ok_btn.is_visible(timeout=1000):
+                            ok_btn.click(force=True)
+                            page.wait_for_timeout(1000)
+                    except:
+                        pass
                     
                     # Use a resilient click that handles WAF overlays
                     def smart_click(selector):
@@ -480,6 +478,14 @@ def run_automation_logic(page, reader, unchecked_companies):
                         
                         if res == "RETRY":
                             print(f"      [Captcha] Incorrect code. Retrying attempt {cap_attempt+1}...")
+                            # Close the invalid captcha modal alert to return to form
+                            try:
+                                ok_btn = page.locator("button:has-text('Ok'), button:has-text('OK'), button:has-text('Go Back')").first
+                                if ok_btn.is_visible(timeout=3000):
+                                    ok_btn.click(force=True)
+                                    page.wait_for_timeout(1000)
+                            except:
+                                pass
                             continue
                         
                         if res == "Pending|No result found.":
@@ -492,6 +498,15 @@ def run_automation_logic(page, reader, unchecked_companies):
                         if status != "Pending":
                             save_result_to_db(account, m['db'], status, feedback)
                             send_push_notification(account.get('TOKENS'), username, f"{m['cdsc']}: {status} - {feedback}")
+                        
+                        # Close the successful/unsuccessful result modal to return to the form for the next account
+                        try:
+                            ok_btn = page.locator("button:has-text('Ok'), button:has-text('OK'), button:has-text('Go Back')").first
+                            if ok_btn.is_visible(timeout=3000):
+                                ok_btn.click(force=True)
+                                page.wait_for_timeout(1000)
+                        except:
+                            pass
                         break
                 except Exception as e:
                     print(f"     Error for {username}: {e}")
