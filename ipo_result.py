@@ -282,22 +282,29 @@ def run_status_check():
         user_data_dir = os.path.join(os.getcwd(), "chrome_profile_final")
         
         try:
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                headless=os.environ.get("HEADLESS", "false").lower() != "false",
-                channel="chrome",
-                ignore_default_args=["--enable-automation"],
-                args=[
+            launch_args = {
+                "user_data_dir": user_data_dir,
+                "headless": os.environ.get("HEADLESS", "false").lower() != "false",
+                "channel": "chrome",
+                "ignore_default_args": ["--enable-automation"],
+                "args": [
                     '--disable-blink-features=AutomationControlled',
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--window-size=1366,768',
                 ],
-                viewport={"width": 1366, "height": 768},
-                locale="en-US",
-                timezone_id="Asia/Kathmandu",
-            )
+                "viewport": {"width": 1366, "height": 768},
+                "locale": "en-US",
+                "timezone_id": "Asia/Kathmandu",
+            }
+            
+            proxy_url = os.environ.get("PROXY_URL")
+            if proxy_url:
+                launch_args["proxy"] = {"server": proxy_url}
+                print(f"  [Proxy] Routing traffic through proxy...")
+                
+            context = p.chromium.launch_persistent_context(**launch_args)
             
             # Persistent context has an open page by default
             if context.pages:
