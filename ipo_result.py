@@ -221,8 +221,6 @@ def solve_captcha(page, reader, max_retries=3):
                     all_digits = "".join(re.findall(r'\d', "".join(results)))
                     if len(all_digits) == 5:
                         guesses.append(all_digits)
-                    elif len(all_digits) > 5:
-                        guesses.append(all_digits[:5])
 
             for name, img_proc in paths_cv:
                 for inverted in [False, True]:
@@ -233,8 +231,6 @@ def solve_captcha(page, reader, max_retries=3):
                     all_digits = "".join(re.findall(r'\d', "".join(results)))
                     if len(all_digits) == 5:
                         guesses.append(all_digits)
-                    elif len(all_digits) > 5:
-                        guesses.append(all_digits[:5])
 
             # Strategy B: Fallback letter-mapping OCR using recognize (extremely resilient)
             if not guesses:
@@ -268,8 +264,14 @@ def solve_captcha(page, reader, max_retries=3):
                         if results:
                             raw_text = results[0][1]
                             mapped = clean_and_map_digits(raw_text)
+                            
+                            # Filter exact matches out of mapped letters/digits
+                            # Captchas are precisely 5 digits
                             if len(mapped) == 5:
                                 guesses.append(mapped)
+                            elif len(mapped) == 6 and (mapped.startswith('3') or mapped.startswith('4') or mapped.startswith('7')):
+                                # Alphanumeric sometimes prepends noise, take final 5 digits
+                                guesses.append(mapped[-5:])
                             elif len(mapped) > 5:
                                 guesses.append(mapped[:5])
 
@@ -285,6 +287,8 @@ def solve_captcha(page, reader, max_retries=3):
                             mapped = clean_and_map_digits(raw_text)
                             if len(mapped) == 5:
                                 guesses.append(mapped)
+                            elif len(mapped) == 6 and (mapped.startswith('3') or mapped.startswith('4') or mapped.startswith('7')):
+                                guesses.append(mapped[-5:])
                             elif len(mapped) > 5:
                                 guesses.append(mapped[:5])
 
