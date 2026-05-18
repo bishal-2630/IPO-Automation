@@ -551,15 +551,12 @@ def run_automation_logic(page, reader, unchecked_companies):
                         cap = solve_captcha(page, reader)
                         if not cap: continue
                         
-                        # Use JS fill to bypass WAF iframe interception on input fields
-                        page.evaluate(f"""() => {{
-                            const el = document.querySelector('#captcha');
-                            if (el) {{
-                                el.value = '{cap}';
-                                el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                                el.dispatchEvent(new Event('change', {{bubbles: true}}));
-                            }}
-                        }}""")
+                        # Native coordinate-based click and human-like typing to avoid F5 BIG-IP telemetry blocks
+                        print(f"      Typing Captcha: {cap}...")
+                        smart_click("input#captcha")
+                        page.keyboard.press("Control+A")
+                        page.keyboard.press("Backspace")
+                        page.keyboard.type(cap, delay=random.randint(90, 180))
                         page.wait_for_timeout(300)
                         
                         # Submit via smart_click which uses coordinate-based mouse click
@@ -570,6 +567,30 @@ def run_automation_logic(page, reader, unchecked_companies):
                             page.locator("text=Congratulations, text=Sorry, text=Invalid, text=Incorrect, text=Wrong").first.wait_for(state="visible", timeout=8000)
                         except:
                             pass
+                            
+                        # Check if we were blocked by WAF on submission
+                        body_text = page.inner_text("body")
+                        if "rejected" in body_text.lower() or "administrator" in body_text.lower():
+                            print("      [WAF] Blocked during submission! Reloading portal to clean session...")
+                            try:
+                                page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                                page.wait_for_timeout(3000)
+                            except Exception as waf_e:
+                                print(f"      [WAF] Reload failed: {waf_e}")
+                            
+                            # Re-select company
+                            smart_click(".ng-select-container")
+                            page.wait_for_timeout(500)
+                            page.keyboard.type(m['cdsc'], delay=80)
+                            page.wait_for_timeout(800)
+                            page.keyboard.press("Enter")
+                            
+                            # Re-enter BOID
+                            smart_click("input#boid")
+                            page.keyboard.press("Control+A")
+                            page.keyboard.press("Backspace")
+                            page.keyboard.type(boid, delay=random.randint(80, 150))
+                            continue
                             
                         res = page.evaluate("""
                             () => {
