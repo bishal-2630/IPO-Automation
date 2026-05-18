@@ -10,6 +10,8 @@ import re
 import datetime
 import psycopg2
 import logging
+import cv2
+import numpy as np
 from notifications import send_email_notification, send_push_notification
 try:
     from PIL import Image, ImageEnhance, ImageOps, ImageFilter
