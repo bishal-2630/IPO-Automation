@@ -522,18 +522,28 @@ def run_automation_logic(page, reader, unchecked_companies):
                         try:
                             el = page.locator(selector).first
                             el.wait_for(state="visible", timeout=10000)
+                            
+                            # Ensure the element is scrolled into view
+                            el.scroll_into_view_if_needed()
+                            
                             box = el.bounding_box()
                             if box:
                                 # Human-like movement then click with force=True to bypass interception
                                 page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                                page.wait_for_timeout(100)
                                 page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                                # Fallback click just in case
+                                page.wait_for_timeout(100)
+                                
+                            # Explicitly force focus onto the selected input field natively
+                            el.focus()
+                            page.wait_for_timeout(100)
+                        except Exception as click_e:
+                            # Fallback click just in case
+                            try:
                                 el.click(force=True, timeout=2000)
-                            else:
-                                el.click(force=True)
-                        except:
-                            try: page.locator(selector).first.click(force=True)
-                            except: pass
+                                el.focus()
+                            except:
+                                pass
 
                     # Selection with human-like typing
                     smart_click(".ng-select-container")
@@ -545,9 +555,12 @@ def run_automation_logic(page, reader, unchecked_companies):
                     # BOID with human-like typing
                     print(f"      Typing BOID...")
                     smart_click("input#boid")
+                    page.locator("input#boid").first.focus()
+                    page.wait_for_timeout(200)
                     page.keyboard.press("Control+A")
                     page.keyboard.press("Backspace")
                     page.keyboard.type(boid, delay=random.randint(80, 150))
+                    page.wait_for_timeout(200)
                     
                     # Try solving captcha (up to 3 times per account check)
                     print(f"      Solving Captcha...")
@@ -558,6 +571,8 @@ def run_automation_logic(page, reader, unchecked_companies):
                         # Native coordinate-based click and human-like typing to avoid F5 BIG-IP telemetry blocks
                         print(f"      Typing Captcha: {cap}...")
                         smart_click("input#captcha")
+                        page.locator("input#captcha").first.focus()
+                        page.wait_for_timeout(200)
                         page.keyboard.press("Control+A")
                         page.keyboard.press("Backspace")
                         page.keyboard.type(cap, delay=random.randint(90, 180))
