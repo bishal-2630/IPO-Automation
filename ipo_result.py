@@ -625,6 +625,15 @@ def run_automation_logic(page, reader, unchecked_companies):
                                     page.wait_for_timeout(1000)
                             except:
                                 pass
+                            
+                            # Force click on the captcha image to refresh it natively for the next attempt
+                            try:
+                                captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
+                                if captcha_img.is_visible():
+                                    captcha_img.click(force=True)
+                                    page.wait_for_timeout(1500)
+                            except:
+                                pass
                             continue
                         
                         if res == "Pending|No result found.":
