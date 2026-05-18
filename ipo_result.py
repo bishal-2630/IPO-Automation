@@ -10,14 +10,11 @@ import re
 import datetime
 import psycopg2
 import logging
-import cv2
-import numpy as np
 from notifications import send_email_notification, send_push_notification
 try:
     from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 except ImportError:
     pass
-
 
 try:
     from playwright_stealth import stealth_sync
@@ -170,7 +167,7 @@ def solve_captcha(page, reader, max_retries=3):
                     break
                 print(f"      [Captcha] Blank image (white={white_ratio:.2f}), waiting...")
                 
-                # Only force a refresh if it has been blank for a while (avoiding aggressive refreshes)
+                # Force refresh natively if it remains blank
                 if blank_check >= 5:
                     try:
                         captcha_img.click(force=True, timeout=2000)
@@ -190,39 +187,41 @@ def solve_captcha(page, reader, max_retries=3):
             with open(f"screenshots/captcha_attempt_{attempt}.png", "wb") as f:
                 f.write(captcha_bytes)
 
-            # Process the image with advanced morphological filters
+            # Preprocessing configurations for EasyOCR
             nparr = np.frombuffer(captcha_bytes, np.uint8)
             img_cv = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
             h, w = img_cv.shape
+            img_3x = cv2.resize(img_cv, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC)
+            img_2x = cv2.resize(img_cv, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
 
-            # Generate upscaled images
-            img_3x = cv2.resize(img_cv, (w * 3, h * 3), interpolation=cv2.INTER_LANCZOS4)
-            img_2x = cv2.resize(img_cv, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
-
-            # Advanced image processing pathways
             preprocessed_images = {}
+            
+            # Path 1: 3x Resize + Median Closing (kernel size 3)
+            median_closed = cv2.morphologyEx(img_3x, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+            preprocessed_images["3x_Closed"] = median_closed
 
-            # Path 1: 3x Resize + Closing
-            preprocessed_images["3x_Closing"] = cv2.morphologyEx(img_3x, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+            # Path 2: 3x Resize + Morphological Erode & Dilate (kernel size 2)
+            kernel_2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+            dilated = cv2.dilate(cv2.erode(img_3x, kernel_2), kernel_2)
+            preprocessed_images["3x_ErodeDilate"] = dilated
 
-            # Path 2: 3x Resize + Dilate then Erode
-            kernel_de = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-            preprocessed_images["3x_DilateErode"] = cv2.erode(cv2.dilate(img_3x, kernel_de, iterations=1), kernel_de, iterations=1)
+            # Path 3: 3x Resize + Median Blur 9 + Otsu Binarization
+            blur_9 = cv2.medianBlur(img_3x, 9)
+            _, otsu_9 = cv2.threshold(blur_9, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            preprocessed_images["3x_Blur9_Otsu"] = otsu_9
 
-            # Path 3: 3x Resize + Median Blur 9 + Otsu Thresholding
-            blur9 = cv2.medianBlur(img_3x, 9)
-            _, thresh9 = cv2.threshold(blur9, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            preprocessed_images["3x_Median9_Otsu"] = thresh9
+            # Path 4: 3x Resize + Median Blur 13 + Otsu Binarization
+            blur_13 = cv2.medianBlur(img_3x, 13)
+            _, otsu_13 = cv2.threshold(blur_13, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            preprocessed_images["3x_Blur13_Otsu"] = otsu_13
 
-            # Path 4: 3x Resize + Median Blur 13 + Otsu Thresholding
-            blur13 = cv2.medianBlur(img_3x, 13)
-            _, thresh13 = cv2.threshold(blur13, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            preprocessed_images["3x_Median13_Otsu"] = thresh13
-
-            # Path 5: 1x Original -> Line Subtraction & Closing -> 2x Resize
-            _, binary = cv2.threshold(img_cv, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-            horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (8, 1)), iterations=1)
-            vertical_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 8)), iterations=1)
+            # Path 5: Grayscale + Horizontal/Vertical Line Subtraction + Morphological Closing + 2x Resize
+            thresh = cv2.adaptiveThreshold(img_cv, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 15, 8)
+            horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+            horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
+            vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
+            vertical_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
+            binary = cv2.adaptiveThreshold(img_cv, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 11)
             digits_only = cv2.subtract(cv2.subtract(binary, horizontal_lines), vertical_lines)
             vertical_closing = cv2.morphologyEx(digits_only, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2)))
             preprocessed_images["1x_Closed_2x"] = cv2.resize(vertical_closing, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
@@ -279,39 +278,37 @@ def run_status_check():
     reader = easyocr.Reader(['en'], gpu=False)
 
     with sync_playwright() as p:
-        user_data_dir = os.path.join(os.getcwd(), "chrome_profile_final")
-        
-        try:
-            launch_args = {
-                "user_data_dir": user_data_dir,
-                "headless": os.environ.get("HEADLESS", "false").lower() != "false",
-                "channel": "chrome",
-                "ignore_default_args": ["--enable-automation"],
-                "args": [
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--window-size=1366,768',
-                ],
-                "viewport": {"width": 1366, "height": 768},
-                "locale": "en-US",
-                "timezone_id": "Asia/Kathmandu",
-            }
-            
-            proxy_url = os.environ.get("PROXY_URL")
-            if proxy_url:
-                launch_args["proxy"] = {"server": proxy_url}
-                print(f"  [Proxy] Routing traffic through proxy...")
-                
-            context = p.chromium.launch_persistent_context(**launch_args)
-            
-            # Persistent context has an open page by default
-            if context.pages:
-                page = context.pages[0]
-            else:
-                page = context.new_page()
+        launch_kwargs = {
+            "headless": os.environ.get("HEADLESS", "true").lower() != "false",
+            "channel": "chrome",
+            "ignore_default_args": ["--enable-automation"],
+            "args": [
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--window-size=1366,768',
+            ]
+        }
 
+        try:
+            browser = p.chromium.launch(**launch_kwargs)
+            context = browser.new_context(
+                viewport={"width": 1366, "height": 768},
+                locale="en-US",
+                timezone_id="Asia/Kathmandu",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
+                    "Upgrade-Insecure-Requests": "1"
+                }
+            )
+            page = context.new_page()
             if HAS_STEALTH and stealth_sync:
                 stealth_sync(page)
             
@@ -358,11 +355,11 @@ def run_status_check():
             # Execute the automation logic
             run_automation_logic(page, reader, unchecked_companies)
             
-            context.close()
+            browser.close()
 
         except Exception as e:
             print(f"Fatal Error: {e}")
-            try: context.close()
+            try: browser.close()
             except: pass
 
 def run_automation_logic(page, reader, unchecked_companies):
@@ -576,6 +573,9 @@ def run_automation_logic(page, reader, unchecked_companies):
                             if ok_btn.is_visible(timeout=3000):
                                 ok_btn.click(force=True)
                                 page.wait_for_timeout(1000)
+                            else:
+                                # Safe keyboard escape as fallback modal closer
+                                page.keyboard.press("Escape")
                         except:
                             pass
                         break
