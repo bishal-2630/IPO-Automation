@@ -151,102 +151,144 @@ def get_unchecked_accounts_for_company(company_name):
 
 def solve_captcha(page, reader, max_retries=3):
     import io
+    from PIL import Image, ImageEnhance, ImageOps, ImageFilter
+    
     for attempt in range(max_retries):
         try:
-            # Re-locate captcha each attempt to avoid stale element after JS refresh
+            # Re-locate captcha element
             captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
             captcha_img.wait_for(state="visible", timeout=20000)
 
-            # Wait for real captcha image to load (not blank white)
+            # Wait for real captcha image to load
             captcha_bytes = None
-            for blank_check in range(15):
+            for blank_check in range(10):
                 raw = captcha_img.screenshot()
                 img_check = Image.open(io.BytesIO(raw)).convert('L')
                 all_px = list(img_check.getdata())
                 white_ratio = sum(1 for px in all_px if px > 240) / len(all_px)
-                if white_ratio < 0.9:
+                if white_ratio < 0.95:
                     captcha_bytes = raw
                     break
-                print(f"      [Captcha] Blank image (white={white_ratio:.2f}), waiting...")
-                
-                # Force refresh natively if it remains blank
-                if blank_check >= 5:
-                    try:
-                        captcha_img.click(force=True, timeout=2000)
-                    except:
-                        pass
-                    page.wait_for_timeout(2000)
-                else:
-                    page.wait_for_timeout(1000)
-                    
-                captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
+                page.wait_for_timeout(1000)
 
             if not captcha_bytes:
-                print(f"      [Captcha] Could not load real captcha image. Skipping attempt {attempt+1}.")
+                # Force refresh if blank
+                try:
+                    captcha_img.click(force=True, timeout=2000)
+                except:
+                    pass
+                page.wait_for_timeout(2000)
                 continue
 
             os.makedirs("screenshots", exist_ok=True)
             with open(f"screenshots/captcha_attempt_{attempt}.png", "wb") as f:
                 f.write(captcha_bytes)
 
-            # Preprocessing configurations for EasyOCR
+            # 1. Load original PIL image and create the 4 proven high-contrast paths
+            img_pil = Image.open(io.BytesIO(captcha_bytes)).convert('L')
+            w, h = img_pil.size
+            img_3x_pil = img_pil.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
+            
+            paths_pil = [
+                ("Median3", img_3x_pil.filter(ImageFilter.MedianFilter(size=3))),
+                ("Contrast2.5", ImageEnhance.Contrast(img_3x_pil).enhance(2.5)),
+                ("Thresh128", img_3x_pil.point(lambda p: 255 if p > 128 else 0)),
+                ("Thresh180", img_3x_pil.point(lambda p: 255 if p > 180 else 0))
+            ]
+
+            # 2. OpenCV pipelines
             nparr = np.frombuffer(captcha_bytes, np.uint8)
             img_cv = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
-            h, w = img_cv.shape
-            img_3x = cv2.resize(img_cv, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC)
-            img_2x = cv2.resize(img_cv, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-
-            preprocessed_images = {}
+            img_3x_cv = cv2.resize(img_cv, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC)
+            img_2x_cv = cv2.resize(img_cv, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
             
-            # Path 1: 3x Resize + Median Closing (kernel size 3)
-            median_closed = cv2.morphologyEx(img_3x, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
-            preprocessed_images["3x_Closed"] = median_closed
+            paths_cv = [
+                ("CV_Closed", cv2.morphologyEx(img_3x_cv, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))),
+                ("CV_ErodeDilate", cv2.dilate(cv2.erode(img_3x_cv, cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))), cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))),
+                ("CV_Raw2x", img_2x_cv)
+            ]
 
-            # Path 2: 3x Resize + Morphological Erode & Dilate (kernel size 2)
-            kernel_2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-            dilated = cv2.dilate(cv2.erode(img_3x, kernel_2), kernel_2)
-            preprocessed_images["3x_ErodeDilate"] = dilated
-
-            # Path 3: 3x Resize + Median Blur 9 + Otsu Binarization
-            blur_9 = cv2.medianBlur(img_3x, 9)
-            _, otsu_9 = cv2.threshold(blur_9, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            preprocessed_images["3x_Blur9_Otsu"] = otsu_9
-
-            # Path 4: 3x Resize + Median Blur 13 + Otsu Binarization
-            blur_13 = cv2.medianBlur(img_3x, 13)
-            _, otsu_13 = cv2.threshold(blur_13, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            preprocessed_images["3x_Blur13_Otsu"] = otsu_13
-
-            # Path 5: Grayscale + Horizontal/Vertical Line Subtraction + Morphological Closing + 2x Resize
-            thresh = cv2.adaptiveThreshold(img_cv, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 15, 8)
-            horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
-            horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
-            vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
-            vertical_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
-            binary = cv2.adaptiveThreshold(img_cv, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 11)
-            digits_only = cv2.subtract(cv2.subtract(binary, horizontal_lines), vertical_lines)
-            vertical_closing = cv2.morphologyEx(digits_only, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2)))
-            preprocessed_images["1x_Closed_2x"] = cv2.resize(vertical_closing, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-
-            # Path 6: Raw 2x Resize
-            preprocessed_images["Raw_2x"] = img_2x
-
-            # Run OCR on all pathways and gather guesses
             guesses = []
-            for name, img_proc in preprocessed_images.items():
+
+            # Strategy A: Strict digits-only OCR with readtext (highly confident)
+            for name, p_img in paths_pil:
+                for inverted in [False, True]:
+                    final_img = ImageOps.invert(p_img) if inverted else p_img
+                    buf = io.BytesIO()
+                    final_img.save(buf, format='PNG')
+                    
+                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
+                    all_digits = "".join(re.findall(r'\d', "".join(results)))
+                    if len(all_digits) == 5:
+                        guesses.append(all_digits)
+                    elif len(all_digits) > 5:
+                        guesses.append(all_digits[:5])
+
+            for name, img_proc in paths_cv:
                 for inverted in [False, True]:
                     final_img = cv2.bitwise_not(img_proc) if inverted else img_proc
                     _, encoded = cv2.imencode('.png', final_img)
                     
                     results = reader.readtext(encoded.tobytes(), allowlist='0123456789', detail=0)
                     all_digits = "".join(re.findall(r'\d', "".join(results)))
-                    
                     if len(all_digits) == 5:
                         guesses.append(all_digits)
                     elif len(all_digits) > 5:
                         guesses.append(all_digits[:5])
 
-            # Select the most common 5-digit guess (majority voting)
+            # Strategy B: Fallback letter-mapping OCR using recognize (extremely resilient)
+            if not guesses:
+                def clean_and_map_digits(text):
+                    mapping = {
+                        'z': '2', 'Z': '2', 's': '5', 'S': '5', 'o': '0', 'O': '0',
+                        't': '7', 'T': '7', 'i': '1', 'I': '1', 'l': '1', '|': '1',
+                        'B': '8', 'g': '9', 'q': '9', 'E': '3', 'H': '4', 'A': '4',
+                        'b': '6', 'h': '4'
+                    }
+                    cleaned = []
+                    for char in text:
+                        if char.isdigit():
+                            cleaned.append(char)
+                        elif char in mapping:
+                            cleaned.append(mapping[char])
+                    return "".join(cleaned)
+
+                # Run recognize on PIL images
+                for name, p_img in paths_pil:
+                    for inverted in [False, True]:
+                        final_img = ImageOps.invert(p_img) if inverted else p_img
+                        buf = io.BytesIO()
+                        final_img.save(buf, format='PNG')
+                        
+                        nparr_p = np.frombuffer(buf.getvalue(), np.uint8)
+                        img_cv_p = cv2.imdecode(nparr_p, cv2.IMREAD_GRAYSCALE)
+                        h_p, w_p = img_cv_p.shape
+                        
+                        results = reader.recognize(img_cv_p, horizontal_list=[[0, w_p, 0, h_p]], free_list=[])
+                        if results:
+                            raw_text = results[0][1]
+                            mapped = clean_and_map_digits(raw_text)
+                            if len(mapped) == 5:
+                                guesses.append(mapped)
+                            elif len(mapped) > 5:
+                                guesses.append(mapped[:5])
+
+                # Run recognize on CV images
+                for name, img_proc in paths_cv:
+                    for inverted in [False, True]:
+                        final_img = cv2.bitwise_not(img_proc) if inverted else img_proc
+                        h_p, w_p = final_img.shape
+                        
+                        results = reader.recognize(final_img, horizontal_list=[[0, w_p, 0, h_p]], free_list=[])
+                        if results:
+                            raw_text = results[0][1]
+                            mapped = clean_and_map_digits(raw_text)
+                            if len(mapped) == 5:
+                                guesses.append(mapped)
+                            elif len(mapped) > 5:
+                                guesses.append(mapped[:5])
+
+            # Select the most common 5-digit guess
             if guesses:
                 from collections import Counter
                 counter = Counter(guesses)
@@ -260,8 +302,10 @@ def solve_captcha(page, reader, max_retries=3):
             except:
                 pass
             page.wait_for_timeout(2000)
+            
         except Exception as e:
             print(f"      [Captcha] Error: {e}")
+            
     print("      [Captcha] Failed all attempts.")
     return None
 
