@@ -149,167 +149,94 @@ def get_unchecked_accounts_for_company(company_name):
         return [acc for acc in accounts if acc.get('ID') not in checked_ids]
     except: return accounts
 
-def solve_captcha(page, reader, max_retries=3):
+def solve_captcha(page, reader, max_retries=5):
     import io
-    from PIL import Image, ImageEnhance, ImageOps, ImageFilter
-    
+    from PIL import Image
+
+    # Init ddddocr once (purpose-built captcha model)
+    _ddd_ocr = None
+    try:
+        import ddddocr
+        _ddd_ocr = ddddocr.DdddOcr(show_ad=False)
+    except Exception as e:
+        print(f"      [Captcha] ddddocr unavailable: {e}")
+
+    os.makedirs("screenshots", exist_ok=True)
+
     for attempt in range(max_retries):
         try:
-            # Re-locate captcha element
-            captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
+            # Re-locate captcha element each attempt (may have refreshed)
+            captcha_img = page.locator(
+                "img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], "
+                ".captcha-image img, #captcha_image"
+            ).first
             captcha_img.wait_for(state="visible", timeout=20000)
 
-            # Wait for real captcha image to load
+            # Wait until captcha is actually loaded (not blank white)
             captcha_bytes = None
-            for blank_check in range(10):
+            for _ in range(10):
                 raw = captcha_img.screenshot()
-                img_check = Image.open(io.BytesIO(raw)).convert('L')
-                all_px = list(img_check.getdata())
-                white_ratio = sum(1 for px in all_px if px > 240) / len(all_px)
+                pil_check = Image.open(io.BytesIO(raw)).convert('L')
+                white_ratio = sum(1 for px in pil_check.getdata() if px > 240) / (pil_check.width * pil_check.height)
                 if white_ratio < 0.95:
                     captcha_bytes = raw
                     break
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(500)
 
             if not captcha_bytes:
-                # Force refresh if blank
+                print(f"      [Captcha] Blank captcha on attempt {attempt+1}, clicking to refresh...")
                 try:
                     captcha_img.click(force=True, timeout=2000)
                 except:
                     pass
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(1500)
                 continue
 
-            os.makedirs("screenshots", exist_ok=True)
+            # Save for debugging
             with open(f"screenshots/captcha_attempt_{attempt}.png", "wb") as f:
                 f.write(captcha_bytes)
 
-            # 1. Load original PIL image and create the 4 proven high-contrast paths
-            img_pil = Image.open(io.BytesIO(captcha_bytes)).convert('L')
-            w, h = img_pil.size
-            img_3x_pil = img_pil.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
-            
-            paths_pil = [
-                ("Median3", img_3x_pil.filter(ImageFilter.MedianFilter(size=3))),
-                ("Contrast2.5", ImageEnhance.Contrast(img_3x_pil).enhance(2.5)),
-                ("Thresh128", img_3x_pil.point(lambda p: 255 if p > 128 else 0)),
-                ("Thresh180", img_3x_pil.point(lambda p: 255 if p > 180 else 0))
-            ]
+            # ── Strategy 1: ddddocr (primary – purpose-built captcha model) ──
+            if _ddd_ocr is not None:
+                try:
+                    raw_result = _ddd_ocr.classification(captcha_bytes)
+                    digits_only = re.sub(r'[^0-9]', '', raw_result)
+                    print(f"      [Captcha] ddddocr raw='{raw_result}' digits='{digits_only}'")
+                    if len(digits_only) == 5:
+                        print(f"      [Captcha] Solved via ddddocr: {digits_only}")
+                        return digits_only
+                    # Try with morph-close pre-processing (reduces grid noise)
+                    nparr = np.frombuffer(captcha_bytes, np.uint8)
+                    img_cv = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+                    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+                    img_closed = cv2.morphologyEx(img_cv, cv2.MORPH_CLOSE, kernel)
+                    _, enc = cv2.imencode('.png', img_closed)
+                    raw2 = _ddd_ocr.classification(enc.tobytes())
+                    digits2 = re.sub(r'[^0-9]', '', raw2)
+                    print(f"      [Captcha] ddddocr (closed) raw='{raw2}' digits='{digits2}'")
+                    if len(digits2) == 5:
+                        print(f"      [Captcha] Solved via ddddocr+close: {digits2}")
+                        return digits2
+                except Exception as ddd_e:
+                    print(f"      [Captcha] ddddocr error: {ddd_e}")
 
-            # 2. OpenCV pipelines
-            nparr = np.frombuffer(captcha_bytes, np.uint8)
-            img_cv = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
-            img_3x_cv = cv2.resize(img_cv, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC)
-            img_2x_cv = cv2.resize(img_cv, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-            
-            paths_cv = [
-                ("CV_Closed", cv2.morphologyEx(img_3x_cv, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))),
-                ("CV_ErodeDilate", cv2.dilate(cv2.erode(img_3x_cv, cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))), cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))),
-                ("CV_Raw2x", img_2x_cv)
-            ]
+            # ── Strategy 2: EasyOCR strict digit readtext ──
+            easy_results = reader.readtext(captcha_bytes, allowlist='0123456789', detail=0)
+            easy_digits = "".join(re.findall(r'\d', "".join(easy_results)))
+            if len(easy_digits) == 5:
+                print(f"      [Captcha] Solved via easyocr: {easy_digits}")
+                return easy_digits
 
-            guesses = []
-
-            # Strategy A: Strict digits-only OCR with readtext (highly confident)
-            for name, p_img in paths_pil:
-                for inverted in [False, True]:
-                    final_img = ImageOps.invert(p_img) if inverted else p_img
-                    buf = io.BytesIO()
-                    final_img.save(buf, format='PNG')
-                    
-                    results = reader.readtext(buf.getvalue(), allowlist='0123456789', detail=0)
-                    all_digits = "".join(re.findall(r'\d', "".join(results)))
-                    if len(all_digits) == 5:
-                        guesses.append(all_digits)
-
-            for name, img_proc in paths_cv:
-                for inverted in [False, True]:
-                    final_img = cv2.bitwise_not(img_proc) if inverted else img_proc
-                    _, encoded = cv2.imencode('.png', final_img)
-                    
-                    results = reader.readtext(encoded.tobytes(), allowlist='0123456789', detail=0)
-                    all_digits = "".join(re.findall(r'\d', "".join(results)))
-                    if len(all_digits) == 5:
-                        guesses.append(all_digits)
-
-            # Strategy B: Fallback letter-mapping OCR using recognize (extremely resilient)
-            if not guesses:
-                def clean_and_map_digits(text):
-                    mapping = {
-                        'z': '2', 'Z': '2', 's': '5', 'S': '5', 'o': '0', 'O': '0',
-                        't': '7', 'T': '7', 'i': '1', 'I': '1', 'l': '1', '|': '1',
-                        'B': '8', 'g': '9', 'q': '9', 'E': '3', 'H': '4', 'A': '4',
-                        'b': '6', 'h': '4'
-                    }
-                    cleaned = []
-                    for char in text:
-                        if char.isdigit():
-                            cleaned.append(char)
-                        elif char in mapping:
-                            cleaned.append(mapping[char])
-                    return "".join(cleaned)
-
-                # Run recognize on PIL images
-                for name, p_img in paths_pil:
-                    for inverted in [False, True]:
-                        final_img = ImageOps.invert(p_img) if inverted else p_img
-                        buf = io.BytesIO()
-                        final_img.save(buf, format='PNG')
-                        
-                        nparr_p = np.frombuffer(buf.getvalue(), np.uint8)
-                        img_cv_p = cv2.imdecode(nparr_p, cv2.IMREAD_GRAYSCALE)
-                        h_p, w_p = img_cv_p.shape
-                        
-                        results = reader.recognize(img_cv_p, horizontal_list=[[0, w_p, 0, h_p]], free_list=[])
-                        if results:
-                            raw_text = results[0][1]
-                            mapped = clean_and_map_digits(raw_text)
-                            
-                            # Filter exact matches out of mapped letters/digits
-                            # Captchas are precisely 5 digits
-                            if len(mapped) == 5:
-                                guesses.append(mapped)
-                            elif len(mapped) == 6 and (mapped.startswith('3') or mapped.startswith('4') or mapped.startswith('7')):
-                                # Alphanumeric sometimes prepends noise, take final 5 digits
-                                guesses.append(mapped[-5:])
-                            elif len(mapped) > 5:
-                                guesses.append(mapped[:5])
-
-                # Run recognize on CV images
-                for name, img_proc in paths_cv:
-                    for inverted in [False, True]:
-                        final_img = cv2.bitwise_not(img_proc) if inverted else img_proc
-                        h_p, w_p = final_img.shape
-                        
-                        results = reader.recognize(final_img, horizontal_list=[[0, w_p, 0, h_p]], free_list=[])
-                        if results:
-                            raw_text = results[0][1]
-                            mapped = clean_and_map_digits(raw_text)
-                            if len(mapped) == 5:
-                                guesses.append(mapped)
-                            elif len(mapped) == 6 and (mapped.startswith('3') or mapped.startswith('4') or mapped.startswith('7')):
-                                guesses.append(mapped[-5:])
-                            elif len(mapped) > 5:
-                                guesses.append(mapped[:5])
-
-            # Select the most common 5-digit guess
-            if guesses:
-                from collections import Counter
-                counter = Counter(guesses)
-                best_code, count = counter.most_common(1)[0]
-                print(f"      [Captcha] Solved: {best_code} (Consensus {count}/{len(guesses)})")
-                return best_code
-
-            print(f"      [Captcha] OCR failed. Refreshing captcha...")
+            print(f"      [Captcha] Attempt {attempt+1} failed (ddddocr='{digits_only if _ddd_ocr else 'N/A'}', easy='{easy_digits}'). Refreshing...")
             try:
                 captcha_img.click(force=True, timeout=2000)
             except:
                 pass
-            page.wait_for_timeout(2000)
-            
+            page.wait_for_timeout(1500)
+
         except Exception as e:
-            print(f"      [Captcha] Error: {e}")
-            
+            print(f"      [Captcha] Error on attempt {attempt+1}: {e}")
+
     print("      [Captcha] Failed all attempts.")
     return None
 
