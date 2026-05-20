@@ -177,7 +177,8 @@ def solve_captcha(page, reader, max_retries=5):
             for _ in range(10):
                 raw = captcha_img.screenshot()
                 pil_check = Image.open(io.BytesIO(raw)).convert('L')
-                white_ratio = sum(1 for px in pil_check.getdata() if px > 240) / (pil_check.width * pil_check.height)
+                arr = np.array(pil_check)
+                white_ratio = np.sum(arr > 240) / arr.size
                 if white_ratio < 0.95:
                     captcha_bytes = raw
                     break
