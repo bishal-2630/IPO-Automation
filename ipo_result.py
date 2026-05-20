@@ -198,13 +198,14 @@ def solve_captcha(page, reader, max_retries=5):
                 f.write(captcha_bytes)
 
             # ── Strategy 1: ddddocr (primary – purpose-built captcha model) ──
+            digits_only = ''
             if _ddd_ocr is not None:
                 try:
                     raw_result = _ddd_ocr.classification(captcha_bytes)
                     digits_only = re.sub(r'[^0-9]', '', raw_result)
                     print(f"      [Captcha] ddddocr raw='{raw_result}' digits='{digits_only}'")
-                    if len(digits_only) == 5:
-                        print(f"      [Captcha] Solved via ddddocr: {digits_only}")
+                    if len(digits_only) >= 4:
+                        print(f"      [Captcha] Solved via ddddocr ({len(digits_only)} digits): {digits_only}")
                         return digits_only
                     # Try with morph-close pre-processing (reduces grid noise)
                     nparr = np.frombuffer(captcha_bytes, np.uint8)
@@ -215,25 +216,42 @@ def solve_captcha(page, reader, max_retries=5):
                     raw2 = _ddd_ocr.classification(enc.tobytes())
                     digits2 = re.sub(r'[^0-9]', '', raw2)
                     print(f"      [Captcha] ddddocr (closed) raw='{raw2}' digits='{digits2}'")
-                    if len(digits2) == 5:
-                        print(f"      [Captcha] Solved via ddddocr+close: {digits2}")
+                    if len(digits2) >= 4:
+                        print(f"      [Captcha] Solved via ddddocr+close ({len(digits2)} digits): {digits2}")
                         return digits2
+                    # Last resort: return best non-empty result so server can validate
+                    best = digits2 if len(digits2) >= len(digits_only) else digits_only
+                    if best:
+                        print(f"      [Captcha] ddddocr returning partial ({len(best)} digits): {best}")
+                        return best
                 except Exception as ddd_e:
                     print(f"      [Captcha] ddddocr error: {ddd_e}")
 
             # ── Strategy 2: EasyOCR strict digit readtext ──
             easy_results = reader.readtext(captcha_bytes, allowlist='0123456789', detail=0)
             easy_digits = "".join(re.findall(r'\d', "".join(easy_results)))
-            if len(easy_digits) == 5:
-                print(f"      [Captcha] Solved via easyocr: {easy_digits}")
+            if len(easy_digits) >= 4:
+                print(f"      [Captcha] Solved via easyocr ({len(easy_digits)} digits): {easy_digits}")
                 return easy_digits
 
-            print(f"      [Captcha] Attempt {attempt+1} failed (ddddocr='{digits_only if _ddd_ocr else 'N/A'}', easy='{easy_digits}'). Refreshing...")
+            print(f"      [Captcha] Attempt {attempt+1} failed (ddddocr='{digits_only}', easy='{easy_digits}'). Refreshing captcha...")
+            # Use JS dispatch so Angular fires its (click) refresh handler properly
             try:
-                captcha_img.click(force=True, timeout=2000)
+                old_src = captcha_img.get_attribute('src') or ''
+                page.evaluate("""
+                    () => {
+                        const img = document.querySelector(\"img[src*='captcha'], img[src*='Captcha'], img[alt='captcha']\");
+                        if (img) { img.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true})); }
+                    }
+                """)
+                # Wait up to 3s for src to actually change (confirms new captcha loaded)
+                for _ in range(6):
+                    page.wait_for_timeout(500)
+                    new_src = captcha_img.get_attribute('src') or ''
+                    if new_src != old_src:
+                        break
             except:
                 pass
-            page.wait_for_timeout(1500)
 
         except Exception as e:
             print(f"      [Captcha] Error on attempt {attempt+1}: {e}")
@@ -569,12 +587,22 @@ def run_automation_logic(page, reader, unchecked_companies):
                             except:
                                 pass
                             
-                            # Force click on the captcha image to refresh it natively for the next attempt
+                            # Refresh captcha via Angular event dispatch (force=True bypasses Angular handlers)
                             try:
                                 captcha_img = page.locator("img[src*='captcha'], img[src*='Captcha'], img[alt='captcha'], .captcha-image img, #captcha_image").first
                                 if captcha_img.is_visible():
-                                    captcha_img.click(force=True)
-                                    page.wait_for_timeout(1500)
+                                    old_src = captcha_img.get_attribute('src') or ''
+                                    page.evaluate("""
+                                        () => {
+                                            const img = document.querySelector(\"img[src*='captcha'], img[src*='Captcha'], img[alt='captcha']\");
+                                            if (img) { img.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true})); }
+                                        }
+                                    """)
+                                    for _ in range(6):
+                                        page.wait_for_timeout(500)
+                                        new_src = captcha_img.get_attribute('src') or ''
+                                        if new_src != old_src:
+                                            break
                             except:
                                 pass
                             continue
