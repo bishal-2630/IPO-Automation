@@ -317,35 +317,64 @@ def run_status_check():
                 page.wait_for_timeout(random.randint(1000, 2000))
             except: pass
 
-            print(f"Navigating to {url}...")
-            page.goto(url, wait_until='domcontentloaded', timeout=60000, referer="https://www.google.com/")
-            
-            # Check for WAF rejection - check raw HTML content too
-            page_html = page.content()
-            body_text = page.inner_text("body")
-            page_title = page.title()
-            print(f"  Page Title: '{page_title}'")
-            
-            if ("rejected" in body_text.lower() or 
-                "administrator" in body_text.lower() or
-                "Request Rejected" in page_html or
-                "rejected" in page_title.lower()):
-                print(f"[CRITICAL] WAF blocked the request!")
-                print(f"  Body preview: {body_text[:200]}")
+            # Attempt navigation up to 3 times (BIG-IP may serve empty page on first hit)
+            nav_success = False
+            for nav_attempt in range(3):
+                print(f"Navigating to {url}... (attempt {nav_attempt+1})")
+                try:
+                    page.goto(url, wait_until='networkidle', timeout=60000, referer="https://www.google.com/")
+                except Exception as nav_e:
+                    print(f"  [Nav] networkidle wait failed (non-fatal): {nav_e}")
+                    try:
+                        page.goto(url, wait_until='domcontentloaded', timeout=60000, referer="https://www.google.com/")
+                    except:
+                        pass
+
+                page.wait_for_timeout(3000)
+
+                # Check for WAF rejection
+                page_html = page.content()
+                body_text = page.inner_text("body")
+                page_title = page.title()
+                print(f"  Page Title: '{page_title}'")
+                print(f"  Body length: {len(body_text)} chars")
+
+                if ("rejected" in body_text.lower() or
+                    "administrator" in body_text.lower() or
+                    "Request Rejected" in page_html or
+                    "rejected" in page_title.lower()):
+                    print(f"[CRITICAL] WAF blocked the request!")
+                    print(f"  Body preview: {body_text[:200]}")
+                    os.makedirs("screenshots", exist_ok=True)
+                    page.screenshot(path="screenshots/waf_block.png")
+                    return
+
+                # Check if Angular loaded (body non-empty and has ng-select)
+                if len(body_text) > 100:
+                    nav_success = True
+                    break
+
+                print(f"  [Nav] Page body empty on attempt {nav_attempt+1}. Waiting 5s before retry...")
                 os.makedirs("screenshots", exist_ok=True)
-                page.screenshot(path="screenshots/waf_block.png")
+                page.screenshot(path=f"screenshots/blank_page_attempt_{nav_attempt}.png")
+                page.wait_for_timeout(5000)
+
+            if not nav_success:
+                print("[CRITICAL] Page remained blank after 3 navigation attempts. Aborting.")
                 return
 
             # Wait for Angular app to fully load
             print("  Waiting for Angular app to load...")
             try:
-                page.wait_for_selector("ng-select, .ng-select-container", timeout=30000)
+                page.wait_for_selector("ng-select, .ng-select-container", timeout=60000)
             except Exception:
-                # One more WAF check if selector timed out
                 body_text2 = page.inner_text("body")
                 print(f"  [Timeout] Page body: {body_text2[:300]}")
+                os.makedirs("screenshots", exist_ok=True)
+                page.screenshot(path="screenshots/angular_timeout.png")
                 raise
             page.wait_for_timeout(2000)
+
 
             
             # Execute the automation logic
