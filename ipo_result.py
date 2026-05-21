@@ -545,8 +545,8 @@ def run_automation_logic(page, reader, unchecked_companies):
                         
                         # Native coordinate-based click and human-like typing to avoid F5 BIG-IP telemetry blocks
                         print(f"      Typing Captcha: {cap}...")
-                        smart_click("input#captcha")
-                        page.locator("input#captcha").first.focus()
+                        smart_click("input#userCaptcha")
+                        page.locator("input#userCaptcha").first.focus()
                         page.wait_for_timeout(200)
                         page.keyboard.press("Control+A")
                         page.keyboard.press("Backspace")
