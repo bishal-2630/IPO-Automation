@@ -299,6 +299,17 @@ def run_status_check():
             if HAS_STEALTH and stealth_sync:
                 stealth_sync(page)
             
+            # Set extra headers ONLY for the initial document navigation to pass the F5 BIG-IP WAF
+            page.set_extra_http_headers({
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1"
+            })
+            
             url = "https://iporesult.cdsc.com.np/"
             
             # 1. Warm up session
@@ -367,6 +378,8 @@ def run_status_check():
             page.wait_for_timeout(2000)
 
 
+            # Clear the extra headers so that background XHR/POST requests natively use the correct Fetch API headers (Sec-Fetch-Dest: empty, etc.)
+            page.set_extra_http_headers({})
             
             # Execute the automation logic
             run_automation_logic(page, reader, unchecked_companies)
