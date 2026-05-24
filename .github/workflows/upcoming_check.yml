@@ -1,6 +1,8 @@
 name: Upcoming IPO Calendar Sync
 
 on:
+  schedule:
+    - cron: '0 4 * * *' # Run at 9:45 AM NST (4:00 AM UTC) daily
   workflow_dispatch:
 
 jobs:
