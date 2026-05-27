@@ -4,7 +4,7 @@ import datetime
 import time
 import re
 from playwright.sync_api import sync_playwright
-from main import login, apply_ipo, handle_password_reset
+from main import login, apply_ipo, handle_password_reset, check_allotment_results
 from expiry_handler import handle_expired_account
 
 # ── Firebase setup ──────────────────────────────────────────────────
@@ -127,6 +127,7 @@ def run_automation():
                         print(f"  🔑 Password Decrypted. Length: {len(decrypted_pass)} chars.")
 
                     account_data = {
+                        'ID': acc['id'],
                         'MEROSHARE_USER': acc['meroshare_user'],
                         'MEROSHARE_PASS': decrypted_pass,
                         'DP_NAME': acc['dp_name'],
@@ -134,6 +135,7 @@ def run_automation():
                         'TPIN': acc['tpin'],
                         'BANK_NAME': acc['bank_name'],
                         'KITTA': str(acc['kitta']),
+                        'owner_id': acc.get('owner_id'),
                     }
 
                     page.goto("https://meroshare.cdsc.com.np", timeout=60000)
@@ -149,6 +151,13 @@ def run_automation():
                         else:
                             status = "Failed"
                             remark = result_detail
+                        
+                        # Call allotment result check after applying
+                        print(f"  Checking allotment status in MeroShare dashboard...")
+                        try:
+                            check_allotment_results(page, account_data)
+                        except Exception as ar_e:
+                            print(f"  ⚠️ Error checking allotment results: {ar_e}")
                     elif login_result == "EXPIRED":
                         print(f"  [{acc['meroshare_user']}] Password expired. Handling reset...")
                         if handle_password_reset(page, account_data):
