@@ -1,10 +1,6 @@
 name: IPO RESULT CHECK
 
 on:
-  schedule:
-    - cron: "45 12 * * *" # 6:30 PM NPT
-    - cron: "45 19 * * *" # 1:30 AM NPT
-    - cron: "45 2 * * *"  # 8:30 AM NPT
   workflow_dispatch:
 
 jobs:

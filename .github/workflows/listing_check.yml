@@ -1,8 +1,6 @@
 name: Secondary Market Listing Check
 
 on:
-  schedule:
-    - cron: '45 5 * * *'  # 11:30 AM NPT (05:45 UTC) daily
   workflow_dispatch:        # Allow manual triggering
 
 jobs:
