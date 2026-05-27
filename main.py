@@ -1,4 +1,4 @@
-﻿from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 import os
 import time
@@ -207,7 +207,7 @@ def fill_and_submit_form(page, account, company_name=None):
     except Exception as e:
         print(f"[{username}] Bank/Branch/Account selection failed. Diagnostics:")
         page.screenshot(path=f"debug_bank_fail_{username}.png")
-        raise e
+        return False, "Bank/Branch/Account selection failed"
 
     print(f"[{username}] Filling Kitta and CRN with validation triggers...")
     detected_min_kitta = 10
@@ -315,21 +315,27 @@ def fill_and_submit_form(page, account, company_name=None):
                 print(f"Application SUCCESS!")
                 msg = f"{company_name} has been applied successfully."
                 send_email_notification(account.get('EMAIL'), f"[MeroShare] Success: {company_name}", f"Hi {username},\n\n{msg}")
+                return True, company_name
             else:
                 error_msg = toast_text
                 if "balance" in error_msg.lower() or "insufficient" in error_msg.lower():
                     msg = f"Your IPO has not been applied due to insufficient balance. Please topup amount and try again."
                     send_email_notification(account.get('EMAIL'), f"[MeroShare] Failed: Insufficient Balance", f"Hi {username},\n\n{msg}")
+                    return False, "Insufficient balance"
                 else:
-                    msg = f"Γ¥î FAILED: {error_msg} - {username}"
+                    msg = f"❌ FAILED: {error_msg} - {username}"
                     send_email_notification(account.get('EMAIL'), f"[MeroShare] Error: Application Failed", f"Hi {username},\n\n{msg}")
+                    return False, error_msg
         except:
              if not page.is_visible("#transactionPIN"):
                  print(f"[{username}] Application submitted successfully (modal closed).")
+                 return True, company_name
              else:
                  print(f"Error: [{username}] Application submission failed (modal still open).")
+                 return False, "Application submission failed (modal still open)"
     else:
         print(f"Warning: [{username}] No TPIN provided. Skipping submission.")
+        return False, "No TPIN provided"
 
 
 def login(page, username, password, dp_name):
@@ -506,10 +512,11 @@ def apply_ipo(page, account):
 
     if clicked_ipo:
         print(f"[{username}] Targeted IPO: {clicked_ipo}")
-        fill_and_submit_form(page, account, company_name=clicked_ipo)
+        return fill_and_submit_form(page, account, company_name=clicked_ipo)
     else:
         print(f"[{username}] No 'Ordinary Shares' found to apply. Skipping silently.")
         page.screenshot(path=f"debug_asba_{username}.png")
+        return False, "No ordinary shares found"
 
 def get_accounts():
     """
