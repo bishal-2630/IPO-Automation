@@ -1,13 +1,14 @@
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 import os
+import re
 import time
 import json
 import random
 import string
 import secrets
 
-from notifications import send_email_notification
+from notifications import send_email_notification, send_push_notification
 from expiry_handler import (
     detect_account_expiry,
     check_account_expiry_warning,
@@ -344,38 +345,42 @@ def login(page, username, password, dp_name):
     """
     print(f"Logging in as {username}...")
     
-    print(f"Selecting DP: {dp_name}...")
-    try:
-        # Robust DP Selection: Try multiple common selectors for the DP dropdown
-        dp_selectors = ["#selectBranch", "select[name='selectBranch']", ".select2-selection", "select"]
-        dp_found = False
-        for selector in dp_selectors:
-            if page.locator(selector).is_visible():
-                page.click(selector)
-                dp_found = True
-                break
-        
-        if not dp_found:
-             page.wait_for_selector("#selectBranch", timeout=15000)
-             page.click("#selectBranch")
+    # Clean/extract search query for DP
+    match = re.search(r'\((\d{5})\)', dp_name)
+    if match:
+        dp_search = match.group(1)
+    else:
+        clean = dp_name.strip()
+        clean = re.sub(r'\(.*?\)', '', clean)
+        for suffix in ['LTD.', 'LIMITED', 'PVT.', 'LTD', 'CO.', 'CORP.', 'BANK']:
+            clean = re.sub(rf'\b{suffix}\b', '', clean, flags=re.IGNORECASE)
+        dp_search = clean[:15].strip()
 
-        page.wait_for_timeout(1000) 
-        page.keyboard.type(dp_name)
-        page.wait_for_timeout(1000) 
+    print(f"Selecting DP: {dp_name} (searching for '{dp_search}')...")
+    try:
+        page.wait_for_selector(".select2-selection", timeout=15000)
+        page.click(".select2-selection")
+        page.wait_for_timeout(1000)
+        
+        # Wait for search field
+        page.wait_for_selector("input.select2-search__field", timeout=5000)
+        page.fill("input.select2-search__field", dp_search)
+        page.wait_for_timeout(1500)
+        
+        # Select matched option
         page.keyboard.press("Enter")
-        page.wait_for_timeout(1000) 
+        page.wait_for_timeout(1500)
     except Exception as e:
         print(f"Warning: DP Selection issue: {e}")
-        # Take a screenshot to see what's wrong with the login page
         page.screenshot(path=f"debug_login_dp_{username}.png")
     
-    # NEW: Try to blur the dropdown to ensure fields are interactable
+    # Try to blur to ensure fields are interactable
     page.mouse.click(0, 0) 
     page.wait_for_timeout(500)
 
     try:
-        # Use a more flexible selector for username (ID, Name, or Placeholder)
-        username_selectors = ["#txtUserName", "input[name='username']", "input[placeholder='Username']"]
+        # MeroShare uses #username and #password IDs now
+        username_selectors = ["#username", "#txtUserName", "input[name='username']", "input[placeholder='Username']"]
         found = False
         for selector in username_selectors:
             if page.locator(selector).is_visible():
@@ -384,15 +389,12 @@ def login(page, username, password, dp_name):
                 break
         
         if not found:
-            # If none found immediately, wait longer for the primary one
-            page.wait_for_selector("#txtUserName", timeout=20000)
-            page.fill("#txtUserName", username)
+            page.wait_for_selector("#username", timeout=20000)
+            page.fill("#username", username)
         
-        # Small pause before password
         page.wait_for_timeout(500)
         
-        # Robust password selection
-        password_selectors = ["#txtPassword", "input[name='password']", "input[placeholder='Password']"]
+        password_selectors = ["#password", "#txtPassword", "input[name='password']", "input[placeholder='Password']"]
         p_found = False
         for selector in password_selectors:
             if page.locator(selector).is_visible():
@@ -401,26 +403,24 @@ def login(page, username, password, dp_name):
                 break
         
         if not p_found:
-            page.wait_for_selector("#txtPassword", timeout=10000)
-            page.fill("#txtPassword", password)
+            page.wait_for_selector("#password", timeout=10000)
+            page.fill("#password", password)
             
     except Exception as e:
         print(f"[{username}] Could not find form fields. State at failure:")
         page.screenshot(path=f"debug_login_fields_{username}.png")
         return False
 
-    # Capture login button text for debugging and try to click
     print(f"Clicking Login button for {username}...")
     page.click("button:has-text('Login')")
     
-    # Wait for navigation/dashboard
     try:
         page.wait_for_load_state('networkidle', timeout=15000)
         page.wait_for_timeout(2000) 
         
         # Check for Password Expiry Redirect
         if "change-password" in page.url or "changepassword" in page.url or page.locator("text=Change Password").is_visible():
-            print(f"[{username}] ΓÜá∩╕Å Password Expired / Change required detected.")
+            print(f"[{username}] ⚠️ Password Expired / Change required detected.")
             return "EXPIRED"
 
         # Check for DEMAT or MeroShare account expiry
@@ -432,7 +432,7 @@ def login(page, username, password, dp_name):
             return True
         elif page.locator(".toast-message").is_visible():
             error_msg = page.locator(".toast-message").inner_text()
-            print(f"ΓÜá∩╕Å Login Failed: {error_msg}")
+            print(f"⚠️ Login Failed: {error_msg}")
             return False
         else:
              if "dashboard" in page.url or "dashboard" in page.content().lower():
@@ -560,10 +560,13 @@ def check_status(page, account):
     print(f"[{username}] Starting targeted Status Watchdog...")
 
     try:
-        # Step 1: Collect names of available IPOs from 'Apply for Issue'
-        page.wait_for_selector(".nav-link:has-text('My ASBA')", timeout=15000)
-        page.click(".nav-link:has-text('My ASBA')")
-        page.wait_for_timeout(2000)
+        # Directly navigate to Application Report page
+        try:
+            page.goto("https://meroshare.cdsc.com.np/#/asba/report", wait_until='networkidle')
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            print(f"[{username}] Failed to open Application Report via direct URL: {e}")
+            return
 
         page.wait_for_selector("a:has-text('Apply for Issue')", timeout=10000)
         page.click("a:has-text('Apply for Issue')")
@@ -761,6 +764,287 @@ def check_status(page, account):
         print(f"[{username}] Fatal error in check_status: {e}")
 
 
+def check_allotment_results(page, account):
+    """
+    Checks the allotment status of applied companies for this account.
+    """
+    import psycopg2
+    import datetime
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        print("DATABASE_URL not set, skipping allotment check.")
+        return
+
+    username = account.get('MEROSHARE_USER')
+    account_id = account.get('ID')
+    if not account_id:
+        account_id = account.get('id')
+    
+    if not account_id:
+        print(f"[{username}] No account ID found in data, skipping allotment check.")
+        return
+
+    # 1. Fetch companies successfully applied ('Success') but missing 'Allotted'/'Not Allotted' in DB for this account
+    try:
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT company_name 
+            FROM automation_applicationlog 
+            WHERE account_id = %s AND status = 'Success'
+            AND company_name NOT IN (
+                SELECT DISTINCT company_name 
+                FROM automation_applicationlog 
+                WHERE account_id = %s AND status IN ('Allotted', 'Not Allotted')
+            )
+        """, (account_id, account_id))
+        unchecked_companies = [row[0] for row in cur.fetchall() if row[0] and row[0] != "Auto-Check"]
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[{username}] Error fetching unchecked companies: {e}")
+        return
+
+    if not unchecked_companies:
+        print(f"[{username}] No unchecked IPO results in database.")
+        return
+
+    print(f"[{username}] Found unchecked companies for allotment check: {unchecked_companies}")
+
+    # Navigate to My ASBA -> Application Report
+    try:
+        page.wait_for_selector(".nav-link:has-text('My ASBA')", timeout=15000)
+        page.click(".nav-link:has-text('My ASBA')")
+        page.wait_for_timeout(2000)
+
+        report_link_selector = "a:has-text('Application Report')"
+        page.click(report_link_selector)
+        page.wait_for_timeout(3000)
+        
+        # Wait for Report buttons to appear
+        page.wait_for_selector("button:has-text('Report'), a:has-text('Report')", timeout=15000)
+        print(f"[{username}] Navigated to Application Report page.")
+    except Exception as e:
+        print(f"[{username}] Failed to open Application Report: {e}")
+        return
+
+
+    for target_company in unchecked_companies:
+        print(f"[{username}] Checking allotment status for {target_company}...")
+        
+
+        # Skip entries that are not actual company names (e.g., Balance Check)
+        ignore_keywords = ["balance", "check"]
+        lowered = target_company.lower()
+        if any(kw in lowered for kw in ignore_keywords):
+            print(f"[{username}] Skipping non-company entry: {target_company}")
+            # No DB update; just continue to next company
+            continue
+
+        # Click Report button for target company using Playwright's native locator API
+        # Find the <li> row that contains the company name, then click the Report button inside it
+        clicked = False
+        try:
+            # Use first 3 significant words for robust matching against display text like "Company - For General Public (SYMBOL)"
+            match_words = [w for w in target_company.split() if len(w) > 2][:3]
+            match_text = ' '.join(match_words)
+            print(f"[{username}] Searching for row matching: '{match_text}'")
+
+            # Find the div row containing the company name
+            row = page.locator('.company-list').filter(has_text=match_text).first
+            row.wait_for(timeout=8000)
+
+            # Find and click the Report button inside that row
+            btn = row.locator('button', has_text='Report').first
+            btn.scroll_into_view_if_needed()
+            btn.click()
+            clicked = True
+            print(f"[{username}] Clicked Report for {target_company}")
+        except Exception as e:
+            print(f"[{username}] Could not click Report button for {target_company}: {e}")
+            clicked = False
+
+        if not clicked:
+            print(f"[{username}] Report button not found for {target_company}")
+            # Update DB to indicate not found so it won't be stuck
+            try:
+                conn = psycopg2.connect(db_url)
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE automation_applicationlog
+                    SET status = 'NotFound', timestamp = %s
+                    WHERE account_id = %s AND company_name = %s
+                    """,
+                    (datetime.datetime.utcnow(), account_id, target_company)
+                )
+                conn.commit()
+            except Exception as e:
+                print(f"[{username}] DB update error for not found {target_company}: {e}")
+            finally:
+                if 'cur' in locals():
+                    cur.close()
+                if 'conn' in locals():
+                    conn.close()
+            continue
+
+        # Wait for the details page to load
+        page.wait_for_load_state('networkidle', timeout=15000)
+        page.wait_for_timeout(2000)
+
+        
+        # Extract status and remark using regex on full page text
+        try:
+            import re
+            full_text = page.inner_text("body")
+            
+            status_match = re.search(r'Status\s*\n\s*([^\n]+)', full_text, re.IGNORECASE)
+            status_val = status_match.group(1).strip() if status_match else ''
+            
+            remark_match = re.search(r'Remarks?\s*\n\s*([^\n]+)', full_text, re.IGNORECASE)
+            final_remark = remark_match.group(1).strip() if remark_match else ''
+        except Exception:
+            status_val = ''
+            final_remark = ''
+            
+        final_status = status_val.strip().lower()
+
+        # Try to parse exact status out of the block of text
+        if 'allotted' in final_status or 'alloted' in final_status:
+            if 'not allotted' in final_status or 'not alloted' in final_status:
+                parsed_status = 'Not Allotted'
+            else:
+                parsed_status = 'Allotted'
+        elif 'rejected' in final_status:
+            parsed_status = 'Rejected'
+        else:
+            parsed_status = final_status
+
+        if parsed_status.lower() in ('allotted', 'not allotted', 'rejected'):
+            # Update the database with the finalized result
+            try:
+                conn = psycopg2.connect(db_url)
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE automation_applicationlog
+                    SET status = %s, remark = %s, timestamp = %s
+                    WHERE account_id = %s AND company_name = %s
+                    """,
+                    (parsed_status.title(), final_remark, datetime.datetime.utcnow(), account_id, target_company)
+                )
+                conn.commit()
+            except Exception as e:
+                print(f"[{username}] DB update error for {target_company}: {e}")
+            finally:
+                if 'cur' in locals():
+                    cur.close()
+                if 'conn' in locals():
+                    conn.close()
+            
+            # Send email notification if email is available
+            email = None
+            try:
+                conn = psycopg2.connect(db_url)
+                cur = conn.cursor()
+                cur.execute("SELECT email FROM auth_user WHERE id = %s", (owner_id,))
+                row = cur.fetchone()
+                if row:
+                    email = row[0]
+                cur.close()
+                conn.close()
+            except Exception:
+                pass
+            if email:
+                # Simplified email subject and body
+                email_subject = 'IPO Result'
+                if parsed_status == 'Allotted':
+                    email_body = f"Congratulations!! {target_company} has been allotted."
+                elif parsed_status == 'Not Allotted':
+                    email_body = f"{target_company} has not been allotted."
+                elif parsed_status == 'Rejected':
+                    email_body = f"Sorry!! your application for {target_company} has been rejected due to insufficient balance."
+                else:
+                    email_body = f"{target_company}: {parsed_status}"
+                send_email_notification(email, email_subject, email_body)
+            
+            # Push notification (FCM tokens)
+            tokens = account.get('TOKENS')
+            if not tokens and owner_id:
+                try:
+                    conn = psycopg2.connect(db_url)
+                    cur = conn.cursor()
+                    cur.execute("SELECT token FROM automation_fcmtoken WHERE user_id = %s", (owner_id,))
+                    tokens = [r[0] for r in cur.fetchall()]
+                    cur.close()
+                    conn.close()
+                except Exception:
+                    pass
+            if tokens:
+                # Simplified push notification title and body
+                push_title = 'IPO Result'
+                if parsed_status == 'Allotted':
+                    push_body = f"Congratulations!! {target_company} has been allotted."
+                elif parsed_status == 'Not Allotted':
+                    push_body = f"{target_company} has not been allotted."
+                elif parsed_status == 'Rejected':
+                    push_body = f"Sorry!! your application for {target_company} has been rejected due to insufficient balance."
+                else:
+                    push_body = f"{target_company}: {parsed_status}"
+                send_push_notification(tokens, push_title, push_body)
+        else:
+            print(f"[{username}] Status '{status_val}' is not finalized yet. Skipping.")
+            # Mark it with a temporary skip status for this run so we don't get stuck in a loop
+            try:
+                conn = psycopg2.connect(db_url)
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE automation_applicationlog
+                    SET status = 'Skipped', timestamp = %s
+                    WHERE account_id = %s AND company_name = %s
+                    """,
+                    (datetime.datetime.utcnow(), account_id, target_company)
+                )
+                conn.commit()
+            except Exception:
+                pass
+            finally:
+                if 'cur' in locals():
+                    cur.close()
+                if 'conn' in locals():
+                    conn.close()
+        
+        # Reliable navigation back to the Application Report list
+        try:
+            # First try window.history.back() as it works best for SPA
+            page.evaluate("window.history.back()")
+            page.wait_for_timeout(2000)
+            
+            # Check if we are back by looking for the Report buttons (using valid standard CSS)
+            has_buttons = page.evaluate("() => document.querySelectorAll('.btn-issue').length > 0")
+            if not has_buttons:
+                # Fallback: re-navigate from side menu
+                page.click(".nav-link:has-text('My ASBA')", timeout=5000)
+                page.wait_for_timeout(1000)
+                page.click("a:has-text('Application Report')", timeout=5000)
+                
+            page.wait_for_selector("button:has-text('Report'), a:has-text('Report'), .btn-issue", timeout=15000)
+        except Exception as e:
+            print(f"[{username}] Error returning to report list: {e}")
+            # Ultimate fallback: reload and re-navigate
+            page.goto("https://meroshare.cdsc.com.np", wait_until='networkidle')
+            page.wait_for_timeout(2000)
+            page.click(".nav-link:has-text('My ASBA')", timeout=5000)
+            page.wait_for_timeout(1000)
+            page.click("a:has-text('Application Report')", timeout=5000)
+            page.wait_for_selector("button:has-text('Report'), a:has-text('Report')", timeout=15000)
+
+
+
+
+
 def run_automation():
     accounts = get_accounts()
     if not accounts:
@@ -810,6 +1094,7 @@ def run_automation():
                 if logged_in:
                     check_account_expiry_warning(page, account)
                     apply_ipo(page, account)
+                    check_allotment_results(page, account)
                 else:
                     print(f"Error: [{username}] Failed to login after {MAX_RETRIES} attempts.")
 
@@ -866,6 +1151,7 @@ def run_status_check():
 
                 if logged_in:
                     check_status(page, account)
+                    check_allotment_results(page, account)
                 else:
                     print(f"Error: [{username}] Could not log in for status check (or checks restricted to apply mode).")
 
