@@ -2,26 +2,36 @@ name: IPO RESULT CHECK
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '15 10 * * *'  # 4:00 PM NPT (10:15 AM UTC)
 
 jobs:
   check-results:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          ref: user-part-1
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright python-dotenv psycopg2-binary firebase-admin cryptography easyocr
+          playwright install chromium
 
       - name: Run IPO Result Check
-        shell: powershell
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
           PROXY_URL: ${{ secrets.PROXY_URL }}
           RUN_MODE: "check_status"
-          HEADLESS: "false"
-        run: |
-          $env:PYTHONHOME=""
-          $env:PYTHONPATH=""
-          $env:PYTHONIOENCODING="utf-8"
-          & "C:\Users\Bishal\AppData\Local\Programs\Python\Python312\python.exe" -u ipo_result.py
+          HEADLESS: "true"
+        run: python ipo_result.py

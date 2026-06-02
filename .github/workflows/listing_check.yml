@@ -2,6 +2,8 @@ name: Secondary Market Listing Check
 
 on:
   workflow_dispatch:        # Allow manual triggering
+  schedule:
+    - cron: '15 5 * * *'    # 11:00 AM NPT (05:15 AM UTC) to check listings daily
 
 jobs:
   check-listing:
