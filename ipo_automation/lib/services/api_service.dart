@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/account.dart';
 
 class ApiService {
-  static const String baseUrl = 'https://bishall10-ipo-automation.hf.space/api';
+  static const String baseUrl = 'https://bishall10-ipo.hf.space/api';
 
   Future<String?> getToken() async {
     final prefs = await SharedPreferences.getInstance();
