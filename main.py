@@ -8,7 +8,7 @@ import random
 import string
 import secrets
 
-from notifications import send_email_notification, send_push_notification
+from notifications import send_email_notification, send_push_notification, get_fcm_tokens_for_user
 from expiry_handler import (
     detect_account_expiry,
     check_account_expiry_warning,
@@ -315,17 +315,26 @@ def fill_and_submit_form(page, account, company_name=None):
             if "success" in toast_text.lower() or "successfully" in toast_text.lower():
                 print(f"Application SUCCESS!")
                 msg = f"{company_name} has been applied successfully."
-                send_email_notification(account.get('EMAIL'), f"[MeroShare] Success: {company_name}", f"Hi {username},\n\n{msg}")
+                owner_id = account.get('owner_id')
+                tokens = get_fcm_tokens_for_user(username, owner_id)
+                if tokens:
+                    send_push_notification(tokens, 'IPO Applied: Success', f"{company_name} applied successfully for {username}.")
                 return True, company_name
             else:
                 error_msg = toast_text
                 if "balance" in error_msg.lower() or "insufficient" in error_msg.lower():
                     msg = f"Your IPO has not been applied due to insufficient balance. Please topup amount and try again."
-                    send_email_notification(account.get('EMAIL'), f"[MeroShare] Failed: Insufficient Balance", f"Hi {username},\n\n{msg}")
+                    owner_id = account.get('owner_id')
+                    tokens = get_fcm_tokens_for_user(username, owner_id)
+                    if tokens:
+                        send_push_notification(tokens, 'IPO Failed: Insufficient Balance', f"{company_name}: {msg}")
                     return False, "Insufficient balance"
                 else:
                     msg = f"❌ FAILED: {error_msg} - {username}"
-                    send_email_notification(account.get('EMAIL'), f"[MeroShare] Error: Application Failed", f"Hi {username},\n\n{msg}")
+                    owner_id = account.get('owner_id')
+                    tokens = get_fcm_tokens_for_user(username, owner_id)
+                    if tokens:
+                        send_push_notification(tokens, 'IPO Application Failed', f"{company_name}: {error_msg}")
                     return False, error_msg
         except:
              if not page.is_visible("#transactionPIN"):
@@ -723,14 +732,14 @@ def check_status(page, account):
 
                 # Notification logic for final results
                 if "verified" in status_val and "unverified" not in status_val:
-                    print(f"[{username}] Γ£à SUCCESS: {target_ipo} is Verified. (Email skipped as per configuration)")
+                    print(f"[{username}] ✅ SUCCESS: {target_ipo} is Verified. (Email skipped as per configuration)")
                     # send_email_notification(account.get('EMAIL'), f"[MeroShare] Status: Verified!", f"Hi {username},\n\n{target_ipo} has been applied successfully.")
                 elif "rejected" in status_val or "insufficient" in remark_val or "balance" in remark_val:
-                    msg = f"Your IPO ({target_ipo}) was rejected. REMARK: {remark_val}."
-                    print(f"[{username}] Γ¥î REJECTED: {msg}")
+                    notif_msg = f"Your IPO ({target_ipo}) application was rejected due to insufficient balance. Please top up and try again."
+                    print(f"[{username}] ❌ REJECTED: {notif_msg}")
 
                     auto_reapply_enabled = os.getenv("AUTO_REAPPLY", "false").lower() == "true"
-                    
+
                     if auto_reapply_enabled:
                         print(f"[{username}] Auto-reapply enabled. Looking for button...")
                         reapply_btn = page.locator("button:has-text('Edit'), button:has-text('Re-Apply'), button:has-text('Reapply')").first
@@ -743,13 +752,39 @@ def check_status(page, account):
                             page.goto("https://meroshare.cdsc.com.np/#/asba/report", wait_until='networkidle')
                             continue
                         else:
-                            print(f"[{username}] No reapply button found for rejected IPO. Ending silently.")
-                            # No notification sent when reapply enabled but button missing (silent end)
-                    else:
-                        print(f"[{username}] Auto-reapply disabled. Sending rejection notification.")
-                        send_email_notification(account.get('EMAIL'), f"[MeroShare] Status: Rejected", f"Hi {username},\n\n{msg}\n\nTo reapply, please topup and the automation will retry in the next scheduled run.")
+                            print(f"[{username}] No reapply button found for rejected IPO. Sending notification.")
+
+                    # Send push notification to FCM tokens
+                    owner_id = account.get('owner_id')
+                    tokens = get_fcm_tokens_for_user(username, owner_id)
+                    if tokens:
+                        send_push_notification(tokens, 'IPO Failed: Insufficient Balance', notif_msg)
+
+                    # Save to DB so it shows in the app's notification tab
+                    db_url = os.getenv("DATABASE_URL")
+                    account_id = account.get('ID') or account.get('id')
+                    if db_url and account_id:
+                        try:
+                            import psycopg2, datetime as _dt
+                            conn = psycopg2.connect(db_url)
+                            cur = conn.cursor()
+                            cur.execute(
+                                """
+                                INSERT INTO automation_applicationlog
+                                    (account_id, company_name, status, remark, timestamp, is_read, is_listed)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                """,
+                                (account_id, target_ipo, 'Failed', notif_msg,
+                                 _dt.datetime.utcnow(), False, False)
+                            )
+                            conn.commit()
+                            cur.close()
+                            conn.close()
+                            print(f"[{username}] Saved insufficient balance failure log for {target_ipo}")
+                        except Exception as db_err:
+                            print(f"[{username}] DB log error for insufficient balance: {db_err}")
                 else:
-                    print(f"[{username}] ΓÅ│ {target_ipo} still pending ({status_val}).")
+                    print(f"[{username}] ⏳ {target_ipo} still pending ({status_val}).")
 
                 # Return to list
                 page.go_back()
@@ -784,6 +819,20 @@ def check_allotment_results(page, account):
     if not account_id:
         print(f"[{username}] No account ID found in data, skipping allotment check.")
         return
+
+    owner_id = account.get('owner_id')
+    if not owner_id:
+        try:
+            conn = psycopg2.connect(db_url)
+            cur = conn.cursor()
+            cur.execute("SELECT owner_id FROM automation_account WHERE id = %s", (account_id,))
+            row = cur.fetchone()
+            if row:
+                owner_id = row[0]
+            cur.close()
+            conn.close()
+        except Exception:
+            pass
 
     # 1. Fetch companies successfully applied ('Success') but missing 'Allotted'/'Not Allotted' in DB for this account
     try:
@@ -922,7 +971,17 @@ def check_allotment_results(page, account):
             parsed_status = final_status
 
         if parsed_status.lower() in ('allotted', 'not allotted', 'rejected'):
-            # Update the database with the finalized result
+            # Compose notification messages
+            if parsed_status == 'Allotted':
+                notif_body = f"Congratulations!! {target_company} has been allotted."
+            elif parsed_status == 'Not Allotted':
+                notif_body = f"{target_company} has not been allotted."
+            elif parsed_status == 'Rejected':
+                notif_body = f"Sorry!! your application for {target_company} has been rejected due to insufficient balance."
+            else:
+                notif_body = f"{target_company}: {parsed_status}"
+
+            # Update the existing 'Success' row status in the database
             try:
                 conn = psycopg2.connect(db_url)
                 cur = conn.cursor()
@@ -930,69 +989,38 @@ def check_allotment_results(page, account):
                     """
                     UPDATE automation_applicationlog
                     SET status = %s, remark = %s, timestamp = %s
-                    WHERE account_id = %s AND company_name = %s
+                    WHERE account_id = %s AND company_name = %s AND status = 'Success'
                     """,
                     (parsed_status.title(), final_remark, datetime.datetime.utcnow(), account_id, target_company)
                 )
                 conn.commit()
+
+                # INSERT a NEW log entry for the result so it appears in the app notification tab
+                cur.execute(
+                    """
+                    INSERT INTO automation_applicationlog
+                        (account_id, company_name, status, remark, timestamp, is_read, is_listed)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (account_id, target_company, parsed_status.title(), notif_body,
+                     datetime.datetime.utcnow(), False, False)
+                )
+                conn.commit()
+                print(f"[{username}] Inserted result log entry: {parsed_status} for {target_company}")
             except Exception as e:
-                print(f"[{username}] DB update error for {target_company}: {e}")
+                print(f"[{username}] DB update/insert error for {target_company}: {e}")
             finally:
                 if 'cur' in locals():
                     cur.close()
                 if 'conn' in locals():
                     conn.close()
-            
-            # Send email notification if email is available
-            email = None
-            try:
-                conn = psycopg2.connect(db_url)
-                cur = conn.cursor()
-                cur.execute("SELECT email FROM auth_user WHERE id = %s", (owner_id,))
-                row = cur.fetchone()
-                if row:
-                    email = row[0]
-                cur.close()
-                conn.close()
-            except Exception:
-                pass
-            if email:
-                # Simplified email subject and body
-                email_subject = 'IPO Result'
-                if parsed_status == 'Allotted':
-                    email_body = f"Congratulations!! {target_company} has been allotted."
-                elif parsed_status == 'Not Allotted':
-                    email_body = f"{target_company} has not been allotted."
-                elif parsed_status == 'Rejected':
-                    email_body = f"Sorry!! your application for {target_company} has been rejected due to insufficient balance."
-                else:
-                    email_body = f"{target_company}: {parsed_status}"
-                send_email_notification(email, email_subject, email_body)
-            
-            # Push notification (FCM tokens)
-            tokens = account.get('TOKENS')
-            if not tokens and owner_id:
-                try:
-                    conn = psycopg2.connect(db_url)
-                    cur = conn.cursor()
-                    cur.execute("SELECT token FROM automation_fcmtoken WHERE user_id = %s", (owner_id,))
-                    tokens = [r[0] for r in cur.fetchall()]
-                    cur.close()
-                    conn.close()
-                except Exception:
-                    pass
+
+            # Fetch FCM tokens
+            tokens = get_fcm_tokens_for_user(username, owner_id)
+
+            # Send push notification (shows in notification bar AND is stored in app notification tab via the new log)
             if tokens:
-                # Simplified push notification title and body
-                push_title = 'IPO Result'
-                if parsed_status == 'Allotted':
-                    push_body = f"Congratulations!! {target_company} has been allotted."
-                elif parsed_status == 'Not Allotted':
-                    push_body = f"{target_company} has not been allotted."
-                elif parsed_status == 'Rejected':
-                    push_body = f"Sorry!! your application for {target_company} has been rejected due to insufficient balance."
-                else:
-                    push_body = f"{target_company}: {parsed_status}"
-                send_push_notification(tokens, push_title, push_body)
+                send_push_notification(tokens, 'IPO Result', notif_body)
         else:
             print(f"[{username}] Status '{status_val}' is not finalized yet. Skipping.")
             # Mark it with a temporary skip status for this run so we don't get stuck in a loop

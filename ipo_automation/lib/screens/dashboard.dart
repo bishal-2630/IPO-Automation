@@ -37,15 +37,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
         List<dynamic> allLogs = snapshot.data ?? [];
 
-        // Filter out technical relay events/debug logs
+        // Filter out technical relay events/debug logs and block amount status noise
         final displayLogs = allLogs.where((l) {
           final String remark = (l['remark'] ?? '').toString().toLowerCase();
           final String status = (l['status'] ?? '').toString().toLowerCase();
-          // Filter out patterns that look like technical relay logs
-          return !remark.contains("relay") && 
-                 !remark.contains("sms") && 
+          // Filter out relay/debug logs and block amount status updates
+          return !remark.contains("relay") &&
+                 !remark.contains("sms") &&
                  !remark.contains("otp") &&
-                 !status.contains("relay");
+                 !status.contains("relay") &&
+                 !remark.contains("block amount status") &&
+                 !status.contains("block amount status");
         }).toList();
 
         if (displayLogs.isEmpty) {

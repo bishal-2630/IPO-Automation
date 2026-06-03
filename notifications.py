@@ -144,3 +144,38 @@ def broadcast_push_notification(title, body):
             print("No tokens found to broadcast.")
     except Exception as e:
         print(f"Error in broadcast: {e}")
+
+
+def get_fcm_tokens_for_user(username, owner_id=None):
+    """
+    Fetches all FCM tokens for a user, using owner_id if provided, 
+    or falling back to lookup by meroshare username.
+    """
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        return []
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        
+        # If owner_id is not provided, look it up from the account table
+        if not owner_id and username:
+            cur.execute("SELECT owner_id FROM automation_account WHERE meroshare_user = %s", (username,))
+            row = cur.fetchone()
+            if row:
+                owner_id = row[0]
+        
+        if owner_id:
+            cur.execute("SELECT token FROM automation_fcmtoken WHERE user_id = %s", (owner_id,))
+            tokens = [r[0] for r in cur.fetchall()]
+            cur.close()
+            conn.close()
+            return tokens
+            
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error fetching FCM tokens for user {username}: {e}")
+    return []
+

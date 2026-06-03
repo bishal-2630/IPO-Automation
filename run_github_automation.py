@@ -179,7 +179,13 @@ def run_automation():
                     try:
                         conn = psycopg2.connect(DB_URL)
                         cur = conn.cursor()
-                        if remark != "No ordinary shares found":
+                        # Skip logging for: no IPO found, and Block Amount Status updates (these are noise)
+                        remark_lower = remark.lower()
+                        skip_log = (
+                            remark == "No ordinary shares found" or
+                            "block amount status" in remark_lower
+                        )
+                        if not skip_log:
                             cur.execute("""
                                 INSERT INTO automation_applicationlog
                                     (account_id, company_name, status, remark, timestamp, is_read, is_listed)
@@ -188,25 +194,6 @@ def run_automation():
                             conn.commit()
                         else:
                             print(f"  ℹ️  Skipping database log for: {remark}")
-
-                        if acc.get('owner_id') and status != "Error" and "No ordinary shares" not in remark and not notification_sent:
-                            if ipo_name and ipo_name != "Auto-Check":
-                                cur.execute("""
-                                    SELECT COUNT(*) FROM automation_applicationlog l
-                                    JOIN automation_account a ON l.account_id = a.id
-                                    WHERE a.owner_id = %s AND l.company_name = %s AND l.status = 'Success'
-                                """, (acc['owner_id'], ipo_name))
-                                has_applied = cur.fetchone()[0] > 0
-
-                                if not has_applied:
-                                    cur.execute("SELECT token FROM automation_fcmtoken WHERE user_id = %s", (acc['owner_id'],))
-                                    all_tokens = [row[0] for row in cur.fetchall()]
-                                    send_push_notification(all_tokens, acc['meroshare_user'], f"{ipo_name or 'IPO'} - New IPO is available.")
-
-                            cur.execute("SELECT token FROM automation_fcmtoken WHERE user_id = %s", (acc['owner_id'],))
-                            tokens = [row[0] for row in cur.fetchall()]
-                            send_push_notification(tokens, acc['meroshare_user'], f"{ipo_name or 'IPO'} - {'✅' if status=='Success' else '⚠️'} {status}: {remark}")
-                            notification_sent = True
 
                         cur.close()
                         conn.close()
