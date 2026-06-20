@@ -2,8 +2,6 @@ name: IPO RESULT CHECK
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '15 10 * * *'  # 4:00 PM NPT (10:15 AM UTC)
 
 jobs:
   check-results:

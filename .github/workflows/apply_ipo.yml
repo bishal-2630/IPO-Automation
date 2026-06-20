@@ -1,9 +1,7 @@
 name: Daily IPO Application Check
 
 on:
-  workflow_dispatch:      # Allow manual triggering
-  schedule:
-    - cron: '45 4 * * *'  # 10:30 AM NPT (04:45 AM UTC) to apply for IPOs daily
+  workflow_dispatch:
 
 jobs:
   apply:
