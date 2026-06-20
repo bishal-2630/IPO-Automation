@@ -834,18 +834,18 @@ def check_allotment_results(page, account):
         except Exception:
             pass
 
-    # 1. Fetch companies successfully applied ('Success') but missing 'Allotted'/'Not Allotted' in DB for this account
+    # 1. Fetch companies successfully applied ('Success', 'Skipped', 'NotFound') but missing final status in DB for this account
     try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
         cur.execute("""
             SELECT DISTINCT company_name 
             FROM automation_applicationlog 
-            WHERE account_id = %s AND status = 'Success'
+            WHERE account_id = %s AND status IN ('Success', 'Skipped', 'NotFound')
             AND company_name NOT IN (
                 SELECT DISTINCT company_name 
                 FROM automation_applicationlog 
-                WHERE account_id = %s AND status IN ('Allotted', 'Not Allotted')
+                WHERE account_id = %s AND status IN ('Allotted', 'Not Allotted', 'Rejected')
             )
         """, (account_id, account_id))
         unchecked_companies = [row[0] for row in cur.fetchall() if row[0] and row[0] != "Auto-Check"]
@@ -916,26 +916,6 @@ def check_allotment_results(page, account):
 
         if not clicked:
             print(f"[{username}] Report button not found for {target_company}")
-            # Update DB to indicate not found so it won't be stuck
-            try:
-                conn = psycopg2.connect(db_url)
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    UPDATE automation_applicationlog
-                    SET status = 'NotFound', timestamp = %s
-                    WHERE account_id = %s AND company_name = %s
-                    """,
-                    (datetime.datetime.utcnow(), account_id, target_company)
-                )
-                conn.commit()
-            except Exception as e:
-                print(f"[{username}] DB update error for not found {target_company}: {e}")
-            finally:
-                if 'cur' in locals():
-                    cur.close()
-                if 'conn' in locals():
-                    conn.close()
             continue
 
         # Wait for the details page to load
@@ -989,7 +969,7 @@ def check_allotment_results(page, account):
                     """
                     UPDATE automation_applicationlog
                     SET status = %s, remark = %s, timestamp = %s
-                    WHERE account_id = %s AND company_name = %s AND status = 'Success'
+                    WHERE account_id = %s AND company_name = %s AND status IN ('Success', 'Skipped', 'NotFound')
                     """,
                     (parsed_status.title(), final_remark, datetime.datetime.utcnow(), account_id, target_company)
                 )
@@ -1023,26 +1003,6 @@ def check_allotment_results(page, account):
                 send_push_notification(tokens, 'IPO Result', notif_body)
         else:
             print(f"[{username}] Status '{status_val}' is not finalized yet. Skipping.")
-            # Mark it with a temporary skip status for this run so we don't get stuck in a loop
-            try:
-                conn = psycopg2.connect(db_url)
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    UPDATE automation_applicationlog
-                    SET status = 'Skipped', timestamp = %s
-                    WHERE account_id = %s AND company_name = %s
-                    """,
-                    (datetime.datetime.utcnow(), account_id, target_company)
-                )
-                conn.commit()
-            except Exception:
-                pass
-            finally:
-                if 'cur' in locals():
-                    cur.close()
-                if 'conn' in locals():
-                    conn.close()
         
         # Reliable navigation back to the Application Report list
         try:
