@@ -129,9 +129,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   itemBuilder: (context, index) {
                     final log = filteredLogs[index];
                     final status = log['status']?.toString() ?? '';
-                    final isListed = status == 'Listed';
-                    final isSuccess = status == 'Triggered' || status == 'Success' || isListed;
-                    
+
+                    // ── Icon & colour by status ─────────────────────────
+                    final IconData statusIcon;
+                    final Color statusColor;
+                    switch (status) {
+                      case 'Success':
+                      case 'Triggered':
+                        // IPO applied successfully
+                        statusIcon = Icons.check_circle;
+                        statusColor = Colors.green;
+                        break;
+                      case 'Allotted':
+                        // Allotted — green tick
+                        statusIcon = Icons.check_circle;
+                        statusColor = Colors.green;
+                        break;
+                      case 'Not Allotted':
+                        // Not allotted — red cross / cancel
+                        statusIcon = Icons.cancel;
+                        statusColor = Colors.red;
+                        break;
+                      case 'Listed':
+                        // Secondary market listing — blue chart
+                        statusIcon = Icons.trending_up;
+                        statusColor = Colors.blue;
+                        break;
+                      case 'Error':
+                        // Automation error — orange warning
+                        statusIcon = Icons.warning_amber_rounded;
+                        statusColor = Colors.orange;
+                        break;
+                      default:
+                        // Failed or anything else — red error
+                        statusIcon = Icons.error_outline;
+                        statusColor = Colors.red;
+                    }
+
                     return Dismissible(
                       key: Key(log['id'].toString()),
                       direction: DismissDirection.endToStart,
@@ -162,13 +196,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: isListed 
-                                ? Colors.blue.withOpacity(0.1) 
-                                : (isSuccess ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1)),
-                            child: Icon(
-                              isListed ? Icons.trending_up : (isSuccess ? Icons.check : Icons.error_outline),
-                              color: isListed ? Colors.blue : (isSuccess ? Colors.green : Colors.red),
-                            ),
+                            backgroundColor: statusColor.withOpacity(0.12),
+                            child: Icon(statusIcon, color: statusColor),
                           ),
                           title: Row(
                             children: [

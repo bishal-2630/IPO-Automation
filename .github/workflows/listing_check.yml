@@ -29,11 +29,4 @@ jobs:
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
         run: python scrapper_listing.py
 
-      - name: Commit Cache Update
-        run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'github-actions@github.com'
-          git add notified_listings.txt || true
-          git add last_listing_headline.txt || true
-          git commit -m "chore: update listing cache [skip ci]" || true
-          git push origin user-part-1 || true
+

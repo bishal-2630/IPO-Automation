@@ -5,7 +5,6 @@ from notifications import broadcast_push_notification, send_push_notification
 
 # Configuration
 LISTING_URL = "https://www.sharesansar.com/category/share-listing"
-CACHE_FILE = "notified_listings.txt"
 
 def get_applied_companies():
     """Fetch unique applied company names from the database."""
@@ -74,16 +73,31 @@ def get_tokens_for_allotted_users(company_name):
     return account_data
 
 def get_previously_notified():
-    """Read the cache file to see which companies we already notified about."""
-    if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            return set(line.strip() for line in f.readlines() if line.strip())
-    return set()
+    """Query the database for companies that already have a 'Listed' log entry.
+    This replaces the old file-based cache so the state persists across runs.
+    """
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        print("DATABASE_URL not found. Cannot check previously notified listings.")
+        return set()
 
-def update_notified_cache(company_name):
-    """Append a newly listed company to the cache."""
-    with open(CACHE_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{company_name}\n")
+    notified = set()
+    try:
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT DISTINCT company_name FROM automation_applicationlog "
+            "WHERE status = 'Listed' AND is_listed = TRUE"
+        )
+        for row in cur.fetchall():
+            if row[0]:
+                notified.add(row[0].strip())
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error fetching previously notified listings from DB: {e}")
+
+    return notified
 
 def scrape_listing_headlines():
     """Scrape recent listing headlines from ShareSansar."""
@@ -222,7 +236,7 @@ def check_for_new_listings():
                             body=f"Your alloted {company} IPO has been listed in secondary market."
                         )
                 
-                update_notified_cache(company)
+                # DB already updated via save_listing_log — no separate cache needed
                 found_new_listing = True
                 break
 
